@@ -1,0 +1,15 @@
+streamlit>=1.28.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+plotly>=5.14.0
+pandas>=2.0.0
+biopython>=1.81
+requests>=2.31.0
+schemarecomb>=0.0.5
+streamlit-molstar>=0.0.1
+py3Dmol>=2.0.0
+stmol>=0.0.9
+ipython_genutils>=0.2.0
+scipy>=1.10.0
+PyYAML>=6.0
+networkx>=3.0

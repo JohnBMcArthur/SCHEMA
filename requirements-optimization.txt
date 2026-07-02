@@ -1,0 +1,5 @@
+# Optional dependencies for Library Optimization (ESM2 scoring).
+# Install: pip install -r requirements-optimization.txt
+torch>=2.0.0
+fair-esm>=2.0.0
+scikit-learn>=1.3.0
