@@ -28,6 +28,8 @@ from utils.library_optimization.simulation import (
     top_sequences_to_fasta,
 )
 from utils.session_manager import init_session_state
+from utils.workflow_state import render_pools_required_banner
+from utils.config import CLOUD_MAX_ESM_SAMPLES, is_cloud_hosting
 
 st.set_page_config(
     page_title="Simulate with AI",
@@ -207,13 +209,49 @@ _init_sim_state()
 
 st.title("🤖 Simulate with AI")
 
-st.markdown(
-    "Sample random chimeras from your **saved fragment pools** "
-    "(**Diversity Analysis** or **Library Optimization** → save list to session), "
-    "score each with **ESM2-150M**, "
-    "and plot **Δ score = chimera − wildtype**, where wildtype is the chimera built "
-    "from the query sequence at every block. Run additional batches to grow the histogram."
-)
+render_pools_required_banner()
+
+st.markdown("""
+**Simulate with AI** *(optional)* samples **random chimeras** from your saved fragment
+pools, scores each with **ESM2-150M**, and compares scores to a **wildtype** baseline (the
+chimera built from the query sequence at every block). Use this for a quick sanity check
+on library quality before ordering oligos — it does **not** replace experimental validation.
+
+**Prerequisites:**
+
+- **Save main list to session** on **5. Diversity Analysis**, or **Save filtered list to
+  session** on **6. Library Optimization** (if you pruned pools there).
+
+**What you get**
+
+- A **histogram** of **Δ score = chimera ESM2 − wildtype ESM2** across sampled chimeras.
+- **Δ > 0** — chimera scores higher than wildtype under ESM2; **Δ < 0** — lower.
+- A **top sequences** table (wildtype first, then best Δ) and FASTA download.
+- **Run more sequences** appends to the same histogram without discarding prior samples.
+
+**Parameters**
+
+| Setting | Meaning |
+|---------|---------|
+| **Sequences to generate** | Random chimeras to sample and score in this run |
+| **ESM batch size** | Sequences scored per batch (histogram updates live after each batch) |
+
+**Steps:**
+
+1. Confirm pool summary (blocks, variants per block, combination count) looks correct.
+2. Set sample count and click **Run simulation**.
+3. Inspect the Δ histogram and top sequences; run additional batches if you want more coverage.
+4. *(Optional)* Download top sequences FASTA for external analysis.
+
+**Relationship to Library Optimization**
+
+- **Simulate with AI** — exploratory: “what does the full combinatorial space look like?”
+- **Library Optimization** — targeted pruning via per-fragment regression coefficients.
+
+You can use either, both, or neither before **8. Oligopool Design**.
+
+**Next step:** **8. Oligopool Design** — design synthesis-ready oligos from saved pools.
+""")
 
 selections = st.session_state.get("diversity_saved_selections") or {}
 
@@ -238,6 +276,8 @@ if not esm_ok:
 sim_results = _sync_sim_results(blocks)
 has_results = bool(sim_results.get("score_deltas"))
 
+max_samples = CLOUD_MAX_ESM_SAMPLES if is_cloud_hosting() else 50000
+
 st.markdown("---")
 st.subheader("Run simulation" if not has_results else "Continue simulation")
 
@@ -246,8 +286,8 @@ with col1:
     n_samples = st.number_input(
         "Sequences to generate",
         min_value=1,
-        max_value=50000,
-        value=200,
+        max_value=max_samples,
+        value=min(200, max_samples),
         step=1,
         help="Random chimeras to sample and ESM-score in this run.",
         key="ai_sim_n_samples",

@@ -2,10 +2,31 @@
 File upload and validation utilities for SCHEMA-RASPP Streamlit app.
 """
 
-import streamlit as st
-import tempfile
-import os
-from pathlib import Path
+from typing import Optional, Tuple
+
+
+def _safe_upload_basename(name: str) -> str:
+    """Return a single path segment safe for writing under a temp directory."""
+    base = Path(name or "upload").name
+    if base in (".", "..") or not base:
+        return "upload.bin"
+    return base
+
+
+def _check_upload_size(uploaded_file) -> Tuple[bool, Optional[str]]:
+    size = getattr(uploaded_file, "size", None)
+    if size is None:
+        try:
+            pos = uploaded_file.tell()
+            uploaded_file.seek(0, os.SEEK_END)
+            size = uploaded_file.tell()
+            uploaded_file.seek(pos)
+        except Exception:
+            return True, None
+    if size and size > MAX_UPLOAD_BYTES:
+        mb = MAX_UPLOAD_BYTES / (1024 * 1024)
+        return False, f"File exceeds maximum upload size ({mb:.0f} MB)"
+    return True, None
 
 
 def validate_pdb_file(uploaded_file):
@@ -20,6 +41,10 @@ def validate_pdb_file(uploaded_file):
     """
     if uploaded_file is None:
         return False, "No file uploaded"
+
+    ok, err = _check_upload_size(uploaded_file)
+    if not ok:
+        return False, err
     
     # Check file extension
     if not uploaded_file.name.lower().endswith('.pdb'):
@@ -61,6 +86,10 @@ def validate_msa_file(uploaded_file):
     """
     if uploaded_file is None:
         return False, "No file uploaded"
+
+    ok, err = _check_upload_size(uploaded_file)
+    if not ok:
+        return False, err
     
     # Check file extension
     valid_extensions = ['.txt', '.msa', '.fasta', '.fa', '.aln']
@@ -105,6 +134,10 @@ def validate_crossover_file(uploaded_file):
     """
     if uploaded_file is None:
         return False, "No file uploaded"
+
+    ok, err = _check_upload_size(uploaded_file)
+    if not ok:
+        return False, err
     
     # Check file extension
     if not uploaded_file.name.lower().endswith('.txt'):
@@ -141,6 +174,40 @@ def validate_crossover_file(uploaded_file):
         return False, f"Error reading file: {str(e)}"
 
 
+def validate_contact_file(uploaded_file):
+    """Validate SCHEMA contact file (space-separated residue pairs)."""
+    if uploaded_file is None:
+        return False, "No file uploaded"
+
+    ok, err = _check_upload_size(uploaded_file)
+    if not ok:
+        return False, err
+
+    if not uploaded_file.name.lower().endswith(".txt"):
+        return False, "Contact file must have .txt extension"
+
+    try:
+        content = uploaded_file.read()
+        uploaded_file.seek(0)
+        lines = [
+            line.strip()
+            for line in content.decode("utf-8", errors="ignore").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        if not lines:
+            return False, "Contact file is empty"
+        parsed = 0
+        for line in lines[:50]:
+            parts = line.split()
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                parsed += 1
+        if parsed == 0:
+            return False, "Contact file does not contain valid residue pair lines"
+        return True, None
+    except Exception as e:
+        return False, f"Error reading file: {str(e)}"
+
+
 def save_uploaded_file(uploaded_file, directory=None):
     """
     Save uploaded file to temporary directory.
@@ -161,8 +228,9 @@ def save_uploaded_file(uploaded_file, directory=None):
     # Create directory if it doesn't exist
     os.makedirs(directory, exist_ok=True)
     
-    # Save file
-    file_path = os.path.join(directory, uploaded_file.name)
+    # Save file with sanitized name (prevent path traversal)
+    safe_name = _safe_upload_basename(uploaded_file.name)
+    file_path = os.path.join(directory, safe_name)
     with open(file_path, 'wb') as f:
         f.write(uploaded_file.getbuffer())
     

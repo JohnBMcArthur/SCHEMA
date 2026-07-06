@@ -13,28 +13,35 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-from utils.session_manager import init_session_state
+from utils.session_manager import init_session_state, show_autoload_notice
+from utils.workflow_state import render_cloud_persistence_notice
+from utils.config import is_cloud_hosting
 
 init_session_state()
+show_autoload_notice()
 
 _PROJECTS_PAGE = st.Page("pages/5_Projects.py", title="Projects", icon="📁")
 
 _PAGES = [
     st.Page("pages/0_Introduction.py", title="Introduction", icon="🧬"),
-    st.Page("pages/1_SCHEMA_Energy.py", title="SCHEMA Energy", icon="⚡"),
-    st.Page("pages/2_RASPP_Design.py", title="RASPP Design", icon="🔬"),
-    st.Page("pages/3_Crossover_Analysis.py", title="Crossover Analysis", icon="🧩"),
-    st.Page("pages/4_Assembly_Analysis.py", title="Assembly Analysis", icon="🔧"),
-    st.Page("pages/6_Diversity_Analysis.py", title="Diversity Analysis", icon="🌿"),
-    st.Page("pages/8_Library_Optimization.py", title="Library Optimization", icon="📊"),
-    st.Page("pages/9_Simulate_with_AI.py", title="Simulate with AI", icon="🤖"),
-    st.Page("pages/7_Oligopool_Design.py", title="Oligopool Design", icon="🧪"),
+    st.Page("pages/1_SCHEMA_Energy.py", title="1. SCHEMA Energy", icon="⚡"),
+    st.Page("pages/2_RASPP_Design.py", title="2. RASPP Design", icon="🔬"),
+    st.Page("pages/3_Crossover_Analysis.py", title="3. Crossover Analysis", icon="🧩"),
+    st.Page("pages/4_Assembly_Analysis.py", title="4. Assembly Analysis", icon="🔧"),
+    st.Page("pages/6_Diversity_Analysis.py", title="5. Diversity Analysis", icon="🌿"),
+    st.Page("pages/8_Library_Optimization.py", title="6. Library Optimization", icon="📊"),
+    st.Page("pages/9_Simulate_with_AI.py", title="7. Simulate with AI", icon="🤖"),
+    st.Page("pages/7_Oligopool_Design.py", title="8. Oligopool Design", icon="🧪"),
     _PROJECTS_PAGE,
 ]
 
 pg = st.navigation(_PAGES)
 
+pg.run()
+
 with st.sidebar:
+    if is_cloud_hosting():
+        render_cloud_persistence_notice()
     st.markdown("---")
     st.header("📁 Projects")
 
@@ -110,5 +117,3 @@ with st.sidebar:
 
     st.markdown("---")
     st.page_link(_PROJECTS_PAGE, label="📋 Manage All Projects →")
-
-pg.run()

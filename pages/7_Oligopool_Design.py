@@ -40,6 +40,7 @@ from utils.oligopool_design import (
 )
 from utils.stuffer_design import apply_stuffer_design
 from utils.session_manager import auto_save, init_session_state
+from utils.workflow_state import pools_signature, render_pools_required_banner
 
 st.set_page_config(
     page_title="Oligopool Design",
@@ -51,11 +52,57 @@ init_session_state()
 
 st.title("🧪 Oligopool Design")
 
-st.markdown(
-    "Design **BsaI Golden Gate** oligos from saved fragment homolog pools. "
-    "Terminal codons follow **Assembly Analysis** junction overhangs and reading "
-    "frame; interior residues use high-abundance **E. coli** codons."
-)
+render_pools_required_banner()
+
+st.markdown("""
+**Oligopool Design** converts saved homolog pools into **synthesis-ready DNA oligos** for
+one-pot **BsaI Golden Gate** assembly. Junction codons follow **Assembly Analysis**
+overhangs; interior residues use high-abundance **E. coli** codons.
+
+**Prerequisites:**
+
+1. **3. Crossover Analysis** — applied crossover selection.
+2. **4. Assembly Analysis** — Golden Gate overhangs assigned (including fragment 1 N-terminal
+   options if used).
+3. **5. Diversity Analysis** — **Save main list to session**, or **6. Library Optimization**
+   — **Save filtered list to session** if you pruned pools.
+
+Saved pool count must match the number of assembly fragments.
+
+**Three-step design pipeline**
+
+| Step | What it does |
+|------|----------------|
+| **Step 1 — Fragment inserts (Stage 1)** | For each homolog per fragment: AA → codons → coding DNA → **BsaI-flanked insert** (`GGTCTC` / `GAGACC` sites, junction overhangs highlighted) |
+| **Step 2 — Oligo packing (Stage 2)** | Pack unique Stage 1 blocks into the fewest oligos under your max length; append **forward/reverse primer** binding sites; pad short oligos with **N** stuffer outside primers |
+| **Step 3 — Stuffer design** | Replace **N** tails with designed A/T/G/C sequences (no internal BsaI, balanced GC, limited homopolymers) for Twist-style ordering |
+
+**Options (save before packing)**
+
+- **Forward / Reverse primer** — amplification tags annealed to every packed oligo.
+- **Maximum oligo length (nt)** — vendor limit (e.g. 300 nt); drives packing and stuffer size.
+
+Click **Save Options** so primers and length persist across reloads.
+
+**Reading the output**
+
+- Color highlighting marks **BsaI sites**, **junction overhangs**, and (after Step 3)
+  primer and stuffer regions.
+- **Packing errors** mean a block exceeds capacity — shorten fragments, raise max length, or
+  reduce pool size.
+- Download **packed oligos with N stuffer** after Step 2, or **final oligos** after Step 3.
+
+**Steps:**
+
+1. Set primers and max oligo length; click **Save Options**.
+2. Review **Step 1** inserts per fragment (query + homologs).
+3. Click **Pack oligos** in Step 2; confirm block/oligo counts and download interim FASTA if needed.
+4. Click **Replace stuffer Ns** in Step 3 when satisfied with packing.
+5. Download **final oligos (FASTA)** for oligopool synthesis.
+
+**Ordering:** submit the final FASTA to your vendor (e.g. Twist Oligo Pools). Verify BsaI
+sites and overhangs match your cloning vector and expression construct before ordering.
+""")
 
 selections = st.session_state.get("diversity_saved_selections") or {}
 crossovers = list(st.session_state.get("selected_crossover_positions") or [])
@@ -315,6 +362,8 @@ st.caption(
 )
 
 pack_options_sig = (forward_primer, reverse_primer, max_oligo_length)
+pools_sig = pools_signature(selections)
+combined_sig = (pack_options_sig, pools_sig)
 
 if st.button("Pack oligos", type="primary", key="oligopool_run_step2"):
     with st.spinner("Packing block oligos…"):
@@ -327,7 +376,7 @@ if st.button("Pack oligos", type="primary", key="oligopool_run_step2"):
             max_oligo_length=max_oligo_length,
             pad_to_max=True,
         )
-        st.session_state.oligopool_library_options_sig = pack_options_sig
+        st.session_state.oligopool_library_options_sig = combined_sig
         st.session_state.pop("oligopool_stuffer_result", None)
         st.session_state.pop("oligopool_stuffer_sig", None)
 
@@ -335,8 +384,11 @@ library = st.session_state.get("oligopool_library_result")
 
 if library is None:
     st.info("Configure options above and click **Pack oligos** to run Stage 2.")
-elif pack_options_sig != st.session_state.get("oligopool_library_options_sig"):
-    st.warning("Options have changed since the last run. Click **Pack oligos** to recalculate.")
+elif combined_sig != st.session_state.get("oligopool_library_options_sig"):
+    st.warning(
+        "Primers, max length, saved pools, or assembly context changed since the last run. "
+        "Click **Pack oligos** to recalculate."
+    )
     library = None
 
 if library is not None:
@@ -488,7 +540,7 @@ if library is not None and not library.get("error"):
     )
 
     has_stuffer = any(int(o.get("stuffer_length") or 0) > 0 for o in library["oligos"])
-    stuffer_sig = pack_options_sig
+    stuffer_sig = combined_sig
 
     if not has_stuffer:
         st.info("No stuffer padding in the current pack (all oligos already at max insert capacity).")

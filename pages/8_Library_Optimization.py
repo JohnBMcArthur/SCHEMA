@@ -34,6 +34,12 @@ from utils.library_optimization.pools import (
     remove_variants_from_block,
 )
 from utils.session_manager import init_session_state
+from utils.workflow_state import render_pools_required_banner
+from utils.config import (
+    CLOUD_MAX_OPT_BATCH,
+    CLOUD_MAX_OPT_ROUNDS,
+    is_cloud_hosting,
+)
 
 st.set_page_config(
     page_title="Library Optimization",
@@ -433,6 +439,9 @@ def _run_optimization_ui(
     prior_params = (prior or {}).get("params") or {}
     prior_rounds = (prior or {}).get("rounds") or []
 
+    max_batch = CLOUD_MAX_OPT_BATCH if is_cloud_hosting() else 10000
+    max_rounds = CLOUD_MAX_OPT_ROUNDS if is_cloud_hosting() else 50
+
     if continuing:
         st.info(
             f"**Continuing** from {len(prior_rounds)} completed round(s) "
@@ -464,8 +473,8 @@ def _run_optimization_ui(
         batch_size = st.number_input(
             "Chimeras per round",
             min_value=1,
-            max_value=10000,
-            value=int(prior_params.get("batch_size", 2000)),
+            max_value=max_batch,
+            value=min(int(prior_params.get("batch_size", 2000)), max_batch),
             step=1,
             help="Random chimeras sampled and ESM-scored each round.",
             key="library_opt_batch_size",
@@ -476,7 +485,7 @@ def _run_optimization_ui(
             rounds_to_run = st.number_input(
                 "Additional rounds",
                 min_value=1,
-                max_value=50,
+                max_value=max_rounds,
                 value=5,
                 step=1,
                 help="How many more rounds to run in this step.",
@@ -493,7 +502,7 @@ def _run_optimization_ui(
             rounds_to_run = st.number_input(
                 "Rounds to run",
                 min_value=1,
-                max_value=50,
+                max_value=max_rounds,
                 value=20,
                 step=1,
                 help="Maximum rounds for this run (may stop earlier if early stopping is on).",
@@ -673,14 +682,62 @@ _init_opt_state()
 
 st.title("📊 Library Optimization")
 
-st.markdown(
-    "Iteratively sample random chimeras from your **saved fragment pools** "
-    "(Diversity Analysis → **Save main list to session**), score with **ESM2-150M**, "
-    "and fit **ridge regression** to estimate each block variant's contribution. "
-    "Pruned pools can be saved back to session for downstream pages. "
-    "You can **pause between rounds**, change chimeras per round, and **continue** "
-    "later without losing scored designs."
-)
+render_pools_required_banner()
+
+st.markdown("""
+**Library Optimization** *(optional)* uses **ESM2-150M** and **ridge regression** to
+estimate how each homolog fragment affects predicted chimera fitness. Use the
+coefficients to **prune** redundant or poorly scoring variants before oligo design.
+
+**Prerequisites:**
+
+1. **5. Diversity Analysis** — click **Save main list to session** (or import equivalent
+   progress). This page reads `diversity_saved_selections`.
+2. Applied crossovers and assembly overhangs should still match the pools you saved.
+
+**How it works**
+
+1. Each **round**, the app samples random chimeras from your per-fragment pools and scores
+   them with ESM2.
+2. **Ridge regression** fits block-variant effects (query fragment = coefficient 0).
+3. **Spearman ρ** tracks whether variant rankings stabilize round-to-round; optional early
+   stopping when ρ exceeds your threshold on every fragment.
+4. After enough rounds, use **Filter & prune** to drop homologs with negative or redundant
+   contributions, then **Save filtered list to session**.
+
+**Parameters**
+
+| Setting | Meaning |
+|---------|---------|
+| **Chimeras per round** | Random chimeras sampled and ESM-scored each round |
+| **Rounds to run** / **Additional rounds** | How many rounds in this click (may stop early) |
+| **Spearman ρ threshold** | Rank-stability target for early stopping |
+| **Stop when threshold reached** | End early once all fragments exceed ρ (after minimum rounds) |
+| **Ridge α** | Regularization strength for the regression |
+| **ESM batch size** | Parallel scoring batch size |
+| **Pause after each round** | Run one round per click to inspect before continuing |
+
+**Interpreting coefficients**
+
+- **Higher is better** — positive values suggest the variant improves ESM2 score vs the query
+  fragment at that block; **negative** values suggest worse contribution.
+- The query row stays at coefficient **0**; homologs are ranked relative to it.
+- Convergence plots show whether rankings have stabilized — prune only after ρ looks flat.
+
+**Steps:**
+
+1. Confirm saved pools load correctly (variant counts per fragment).
+2. Click **Start optimization**; use **Pause after each round** if you want to tune settings
+   between rounds, or **Continue optimization** to add more chimeras later.
+3. Review **Spearman ρ**, ridge **R²**, and per-fragment coefficient tables.
+4. In **Filter & prune**, remove unwanted homologs or **Keep top N by coefficient** per fragment.
+5. Click **Save filtered list to session** — required for downstream pages to use pruned pools.
+6. *(Optional)* Download results JSON for your records.
+
+**Next step:** **7. Simulate with AI** for a quick library-wide score distribution, or go
+directly to **8. Oligopool Design**. You can also skip this page entirely if Diversity
+filters are sufficient.
+""")
 
 selections = st.session_state.get("diversity_saved_selections") or {}
 blocks, load_err = load_block_pools_from_session(selections)

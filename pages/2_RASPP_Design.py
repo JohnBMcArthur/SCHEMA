@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from utils.workflow_state import clear_downstream_from_raspp
 from utils.session_manager import init_session_state, has_required_data
 from utils.config import DEFAULTS, SESSION_KEYS
 
@@ -19,9 +20,6 @@ from utils.raspp_wrapper import streamlit_progress_callback
 from utils.visualization import (
     plot_crossover_comparison,
     plot_fragment_lengths,
-    plot_msa_conservation_diversity,
-    compute_msa_column_conservation_diversity,
-    compute_consensus_segment_midpoints,
 )
 from schema_raspp import schema
 
@@ -34,18 +32,41 @@ st.set_page_config(
 # Initialize session state
 init_session_state()
 
-st.title("🔬 RASPP Library Design")
+st.title("🔬 RASPP Design")
 
 st.markdown("""
-Design optimal protein recombination libraries using the RASPP algorithm. 
-Provide SCHEMA energy results and library constraints to generate optimal 
-crossover designs.
+**RASPP** (Recombination as a Shortest-Path Problem) searches for **crossover positions**
+that minimize total SCHEMA disruption energy for a chimera library. This page runs
+**multi-fragment analysis**: it tests many library sizes (fragment counts) within your
+chosen range and reports the best energy found for each.
 
-**Workflow:**
-1. Use SCHEMA contacts from Page 1, or upload MSA and contact files
-2. Set fragment constraints for multi-fragment testing
-3. Run multi-fragment analysis
-4. View optimal crossover designs
+**Prerequisite:** complete **1. SCHEMA Energy** first. This page uses the SCHEMA
+contacts, MSA, and parent sequences stored in your session.
+
+**Parameters** (on this page, above the run button):
+
+- **Minimum fragment length** — shortest block size (in residues) allowed in any design
+  (default 10).
+- **Minimum fragment count** / **Maximum fragment count** — the range of library sizes
+  to test (e.g. 5–20). Each count is evaluated separately; larger ranges take longer.
+
+**Steps:**
+
+1. Set **minimum fragment length** and **fragment count** range below.
+2. Click **Run Multi-Fragment Analysis** and wait for all fragment counts to finish.
+   Results update live in the table below the button.
+3. Review the summary table (fragments vs. best energy). Select a fragment count to
+   inspect individual crossover designs.
+4. *(Optional)* Click **Use these designs as main RASPP results** to promote one
+   fragment count for the detailed **RASPP Results** section (plots, export CSV).
+
+**What you get:** `multi_fragment_results` in session (all tested fragment counts),
+parent sequences for **3. Crossover Analysis**, and optionally a single promoted
+design set. A new run **clears** previously applied crossovers and downstream diversity
+/ oligopool state.
+
+**Next step:** go to **3. Crossover Analysis**, pick crossovers from the RASPP output,
+and click **Apply crossover selection** before continuing to Assembly or Diversity.
 """)
 
 # Check if we have SCHEMA contacts from previous page
@@ -114,176 +135,79 @@ else:
     parents_object = None
     parents_for_fallback = []
 
-# Sidebar for parameters
-with st.sidebar:
-    st.header("RASPP Parameters")
+msa_file = None
+contact_file = None
 
-    min_fragment_diversity = st.number_input(
-        "Minimum Fragment Length",
-        min_value=1,
-        max_value=50,
-        value=DEFAULTS['min_fragment_diversity'],
-        step=1,
-        help="Minimum block length (in residues) allowed in generated libraries"
-    )
-    
-    min_fragments = st.slider(
-        "Minimum fragments",
-        min_value=2,
-        max_value=100,
-        value=DEFAULTS['min_fragments']
-    )
-
-    max_fragments = st.slider(
-        "Maximum fragments",
-        min_value=2,
-        max_value=100,
-        value=DEFAULTS['max_fragments']
-    )
-
-    st.markdown("---")
-    st.markdown("### Project Management")
-    
-    # Show current project if loaded
-    if 'current_project' in st.session_state and st.session_state.get('current_project'):
-        st.info(f"**📁 {st.session_state['current_project']}**")
-    
-    # Store parameters in session state for saving
-    st.session_state['min_fragment_diversity'] = min_fragment_diversity
-    st.session_state['min_fragments'] = min_fragments
-    st.session_state['max_fragments'] = max_fragments
-    # Load project option
-    from utils.session_manager import list_checkpoints, load_checkpoint
-    
-    checkpoints = list_checkpoints()
-    if checkpoints:
-        checkpoint_names = [f"{meta.get('project_name', 'Unknown')}" 
-                           for path, meta in checkpoints[:5]]
-        checkpoint_paths = [path for path, meta in checkpoints[:5]]
-        
-        selected_idx = st.selectbox(
-            "Load Project",
-            range(len(checkpoint_names)),
-            format_func=lambda x: checkpoint_names[x],
-            key='page2_load_project'
-        )
-        
-        if st.button("📂 Load", use_container_width=True, key='page2_load_btn'):
-            try:
-                metadata = load_checkpoint(checkpoint_paths[selected_idx])
-                st.success(f"✓ Loaded: {metadata.get('project_name', 'Unknown')}")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-    
-    st.markdown("---")
-    st.markdown("### Input Files")
-    
-    if not has_schema_contacts:
+if not has_schema_contacts:
+    with st.sidebar:
+        st.markdown("### Input Files")
         msa_file = st.file_uploader(
             "MSA File",
             type=['txt', 'msa', 'fasta', 'fa', 'aln'],
-            help="Multiple sequence alignment file"
+            help="Multiple sequence alignment file",
+            key="raspp_sidebar_msa",
         )
-        
         contact_file = st.file_uploader(
             "Contact File",
             type=['txt'],
-            help="SCHEMA contacts file"
+            help="SCHEMA contacts file",
+            key="raspp_sidebar_contacts",
         )
-    else:
-        msa_file = None
-        contact_file = None
 
-st.markdown("---")
-st.subheader("MSA column conservation and diversity")
-st.caption(
-    "Conservation % is the frequency of the most abundant residue in each column; "
-    "diversity score is the number of distinct residues (including gap characters)."
+# MSA conservation/diversity plot and sliders are disabled for now; defaults feed RASPP.
+st.session_state.setdefault(
+    "msa_seg_conservation_min",
+    DEFAULTS.get("msa_segment_conservation_min", 80.0),
 )
-
-_msa_plot_sequences = None
-if has_schema_contacts and parents_for_fallback:
-    _msa_plot_sequences = parents_for_fallback
-elif not has_schema_contacts and msa_file:
-    try:
-        import io
-
-        msa_file.seek(0)
-        parsed = schema.readMultipleSequenceAlignmentFile(io.BytesIO(msa_file.read()))
-        msa_file.seek(0)
-        _msa_plot_sequences = [seq for _, seq in parsed]
-    except Exception:
-        _msa_plot_sequences = None
-
-if _msa_plot_sequences:
-    _nseq = len(_msa_plot_sequences)
-    _max_div_slider = max(2, min(25, _nseq))
-    _col_thr1, _col_thr2 = st.columns(2)
-    with _col_thr1:
-        _thr_cons = st.slider(
-            "Segment markers: min conservation % (both consecutive columns)",
-            min_value=0.0,
-            max_value=100.0,
-            value=80.0,
-            step=0.5,
-            help=(
-                "A consecutive pair (x1, x2) gets a dot only if both columns have conservation "
-                "strictly greater than this value."
-            ),
-            key="msa_seg_conservation_min",
-        )
-    with _col_thr2:
-        _thr_div = st.slider(
-            "Segment markers: max diversity (both consecutive columns)",
-            min_value=2,
-            max_value=max(2, _max_div_slider),
-            value=min(3, max(2, _max_div_slider)),
-            step=1,
-            help=(
-                "Both columns must have diversity (distinct residues) strictly less than this "
-                "(e.g. 2 allows only columns with diversity 1)."
-            ),
-            key="msa_seg_diversity_max",
-        )
-
-    _pos_tmp, _cons_tmp, _div_tmp = compute_msa_column_conservation_diversity(_msa_plot_sequences)
-    _mid_tmp, _ = compute_consensus_segment_midpoints(
-        _pos_tmp, _cons_tmp, _div_tmp, _thr_cons, _thr_div
-    )
-    st.caption(
-        f"Segment markers: **{len(_mid_tmp)}** midpoint(s) at y = 100% conservation "
-        f"(pairs of consecutive positions both with conservation > {_thr_cons:.1f}% "
-        f"and diversity < {_thr_div})."
-    )
-
-    _fig_msa = plot_msa_conservation_diversity(
-        _msa_plot_sequences,
-        segment_conservation_min_pct=_thr_cons,
-        segment_diversity_max=_thr_div,
-    )
-    if _fig_msa:
-        st.plotly_chart(_fig_msa, use_container_width=True, key="msa_conservation_diversity_chart")
-else:
-    if has_schema_contacts:
-        st.caption(
-            "Parent sequences were not found in session; run SCHEMA contacts on Page 1 with valid parents."
-        )
-    else:
-        st.caption(
-            "Upload an MSA in the sidebar or complete Page 1 with parent sequences to plot conservation and diversity."
-        )
-
-restrict_graph_segment_marks = st.checkbox(
-    "Crossover only at graph segment marks",
-    value=DEFAULTS.get("restrict_crossovers_at_graph_marks", False),
-    help=(
-        "When enabled, RASPP may place fragment boundaries only at SCHEMA crossovers that "
-        "match the green dots on the plot above: use the same conservation and diversity "
-        "sliders to define which consecutive column pairs get a mark."
-    ),
-    key="restrict_crossovers_at_graph_marks",
+st.session_state.setdefault(
+    "msa_seg_diversity_max",
+    DEFAULTS.get("msa_segment_diversity_max", 3),
 )
+st.session_state["restrict_crossovers_at_graph_marks"] = False
+restrict_graph_segment_marks = False
+
+st.subheader("Library constraints")
+_param_col1, _param_col2, _param_col3 = st.columns(3)
+
+with _param_col1:
+    min_fragment_diversity = st.number_input(
+        "Minimum fragment length",
+        min_value=1,
+        max_value=50,
+        value=int(st.session_state.get("min_fragment_diversity", DEFAULTS["min_fragment_diversity"])),
+        step=1,
+        help="Minimum block length (in residues) allowed in generated libraries",
+        key="raspp_min_fragment_length",
+    )
+
+with _param_col2:
+    min_fragments = st.number_input(
+        "Minimum fragment count",
+        min_value=2,
+        max_value=100,
+        value=int(st.session_state.get("min_fragments", DEFAULTS["min_fragments"])),
+        step=1,
+        help="Smallest number of fragments to test",
+        key="raspp_min_fragment_count",
+    )
+
+with _param_col3:
+    max_fragments = st.number_input(
+        "Maximum fragment count",
+        min_value=2,
+        max_value=100,
+        value=int(st.session_state.get("max_fragments", DEFAULTS["max_fragments"])),
+        step=1,
+        help="Largest number of fragments to test",
+        key="raspp_max_fragment_count",
+    )
+
+st.session_state["min_fragment_diversity"] = min_fragment_diversity
+st.session_state["min_fragments"] = min_fragments
+st.session_state["max_fragments"] = max_fragments
+
+if min_fragments > max_fragments:
+    st.error("Minimum fragment count must be ≤ maximum fragment count.")
 
 # File uploads (if not using previous results)
 if not has_schema_contacts:
@@ -310,7 +234,7 @@ if not has_schema_contacts:
 run_button = st.button(
     "Run Multi-Fragment Analysis",
     type="primary",
-    disabled=not has_schema_contacts
+    disabled=not has_schema_contacts or min_fragments > max_fragments,
 )
 
 if run_button:
@@ -366,8 +290,8 @@ if run_button:
             "Parent count": len(parents) if 'parents' in locals() and parents else len(parents_for_fallback),
             "Contact count": len(contacts) if contacts else 0,
             "Minimum fragment length": min_fragment_diversity,
-            "Minimum fragments": min_fragments,
-            "Maximum fragments": max_fragments,
+            "Minimum fragment count": min_fragments,
+            "Maximum fragment count": max_fragments,
             "Crossover only at graph segment marks": restrict_graph_segment_marks,
             "Segment conservation min %": st.session_state.get(
                 "msa_seg_conservation_min",
@@ -385,6 +309,7 @@ if run_button:
         # Initialize session state with empty results for incremental updates
         # Always clear stale results before a new multi-fragment run
         st.session_state[SESSION_KEYS['multi_fragment_results']] = {}
+        clear_downstream_from_raspp()
 
         # Create empty containers for live results display
         st.markdown("---")

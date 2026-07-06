@@ -36,12 +36,61 @@ init_session_state()
 
 st.title("🧪 Assembly Analysis")
 
-st.markdown(
-    "View **query sequence fragments** split at crossover positions from "
-    "**Crossover Analysis**, then assign **Golden Gate overhangs** at each "
-    "fragment junction. Each crossover column belongs to the **left** fragment. "
-    "Gap characters are removed from fragment sequences."
-)
+st.markdown("""
+**Assembly Analysis** turns your applied crossover positions into **query protein
+fragments** and assigns **Golden Gate (BsaI) overhangs** at each junction. Those
+overhangs define how DNA blocks will assemble in one-pot Golden Gate and which codons
+are used at fragment boundaries in **Diversity Analysis** and **Oligopool Design**.
+
+**Prerequisites:**
+
+1. **1. SCHEMA Energy** — provides the **query sequence** (ideally from an MSA-aligned
+   parent so crossover indices match alignment columns).
+2. **3. Crossover Analysis** — you must click **Apply crossover selection**. Draft
+   checkboxes alone are not enough; this page reads `selected_crossover_positions`.
+
+**What this page does:**
+
+1. **Splits the query** at each applied crossover (1-based **alignment column**
+   indices). Gap characters (`-`) are stripped from displayed fragment sequences.
+2. **Assigns junction overhangs** between fragment pairs using the AA-pair compatibility
+   table (`data/gga_aa_pair_compatibility.yaml`). Each crossover column belongs to the
+   **left** fragment at that junction.
+3. **Handles fragment 1 N-terminus** specially (see below) for cloning into an expression
+   vector or Met-start constructs.
+
+**Fragment 1 N-terminal options**
+
+| Query starts with M? | Your choices | Result |
+|---------------------|--------------|--------|
+| **Yes** (or you prepend M) | Auto or pick **AATG / TATG / CATG / GATG** | Universal Met start overhang (`XATG`) chosen last among unused junction overhangs |
+| **No** | **Prepend M** checkbox | Adds N-terminal Met, then XATG logic applies |
+| **No**, no prepend | Optional **vector 5′ overhang** (4 bp) | Matches your cloning vector; otherwise fragment 1 has no special 5′ site |
+
+Changing these widgets **immediately recalculates** overhangs and updates session state
+used by downstream pages. Save your project if you want fragment-1 settings restored later.
+
+**Reading the results**
+
+- **Junction assignments** — one row per internal junction: amino-acid pair at the cut,
+  chosen 4 bp overhang, efficiency score, and example codon pair.
+- **Per-fragment overhangs** — 5′ and 3′ sticky ends for each fragment. The last fragment
+  has no 3′ overhang; fragment 1 may have only a 5′ overhang if configured.
+- **Export** — download TXT or JSON from the expander for your records.
+
+**Steps:**
+
+1. Confirm **applied crossovers** and **query fragments** look correct (lengths and
+   sequences). If you see a warning about an ungapped query, rerun SCHEMA Energy with an
+   MSA so crossover columns align properly.
+2. Set **fragment 1 N-terminal** options if needed for your cloning scheme.
+3. Review junction and per-fragment overhang tables; resolve any errors (e.g. no
+   compatible overhang for an AA pair).
+4. *(Optional)* Export fragment/overhang summary.
+
+**Next step:** **5. Diversity Analysis** — upload a homolog MSA, filter variants per
+fragment using these overhangs, and **Save main list to session** before Oligopool Design.
+""")
 
 crossovers = list(st.session_state.get("selected_crossover_positions") or [])
 aligned_query, query_source = get_aligned_query_sequence()

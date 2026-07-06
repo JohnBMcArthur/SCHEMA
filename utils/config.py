@@ -27,7 +27,7 @@ DEFAULTS = {
     'min_identity': 0.5,  # Minimum identity for BLAST hits (50%)
     'max_identity': 0.9,  # Maximum identity for sequence selection (90%)
     'num_crossovers': 3,
-    'min_fragment_diversity': 8,
+    'min_fragment_diversity': 10,
     'min_fragments': 5,
     'max_fragments': 20,
     'restrict_crossovers_at_graph_marks': False,
@@ -51,14 +51,61 @@ ALPHAFOLD_PARAMS = {
     'timeout': 30,
 }
 
-# EBI API parameters (set EBI_EMAIL env var to override email)
+# EBI API parameters (set EBI_EMAIL env var or Streamlit secret to override email)
 import os as _os
+
+_DEFAULT_EBI_EMAIL = "johnbmcarthur@gmail.com"
+
+
+def get_ebi_email() -> str:
+    email = (_os.environ.get("EBI_EMAIL") or "").strip()
+    if email:
+        return email
+    try:
+        import streamlit as st
+
+        if hasattr(st, "secrets") and "EBI_EMAIL" in st.secrets:
+            secret_email = str(st.secrets["EBI_EMAIL"]).strip()
+            if secret_email:
+                return secret_email
+    except Exception:
+        pass
+    return _DEFAULT_EBI_EMAIL
+
+
+def get_hosting_profile() -> str:
+    profile = (_os.environ.get("SCHEMA_HOSTING") or "local").strip().lower()
+    try:
+        import streamlit as st
+
+        if hasattr(st, "secrets") and "SCHEMA_HOSTING" in st.secrets:
+            profile = str(st.secrets["SCHEMA_HOSTING"]).strip().lower()
+    except Exception:
+        pass
+    return profile or "local"
+
+
+def is_cloud_hosting() -> bool:
+    return get_hosting_profile() == "cloud"
+
+
 EBI_API_PARAMS = {
-    'email': _os.environ.get('EBI_EMAIL', 'johnbmcarthur@gmail.com'),
-    'max_wait_time': 600,  # 10 minutes for BLAST
-    'poll_interval': 5,  # seconds
-    'alignment_timeout': 300,  # 5 minutes for alignment
+    "email": _DEFAULT_EBI_EMAIL,
+    "max_wait_time": 600,  # 10 minutes for BLAST
+    "poll_interval": 5,  # seconds
+    "alignment_timeout": 300,  # 5 minutes for alignment
 }
+
+# Upload limit (align with .streamlit/config.toml maxUploadSize when set)
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+# Conservative caps when SCHEMA_HOSTING=cloud (Streamlit Community Cloud)
+CLOUD_MAX_ESM_SAMPLES = 2000
+CLOUD_MAX_OPT_BATCH = 1000
+CLOUD_MAX_OPT_ROUNDS = 10
+
+# Set SCHEMA_DEBUG=1 to show BLAST TSV debug UI on SCHEMA Energy page
+SCHEMA_DEBUG = _os.environ.get("SCHEMA_DEBUG", "").lower() in ("1", "true", "yes")
 
 # Structure viewer: distance threshold (Å) for "nearby" residues in contact editor
 NEARBY_RESIDUE_DISTANCE = 8.0

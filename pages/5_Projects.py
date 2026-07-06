@@ -15,9 +15,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.session_manager import (
     init_session_state, list_checkpoints, load_checkpoint,
     delete_checkpoint, get_checkpoint_metadata, get_checkpoint_summary,
-    export_checkpoint, import_checkpoint, validate_checkpoint
+    export_checkpoint, import_checkpoint, validate_checkpoint,
+    _sanitize_import_filename,
 )
-from utils.config import CHECKPOINT_DIR, SESSION_KEYS
+from utils.config import CHECKPOINT_DIR, SESSION_KEYS, is_cloud_hosting
+from utils.workflow_state import render_cloud_persistence_notice
 
 st.set_page_config(
     page_title="Projects",
@@ -31,8 +33,39 @@ init_session_state()
 st.title("📁 Project Management")
 
 st.markdown("""
-Manage your saved SCHEMA-RASPP projects. Load, delete, export, and import projects.
+**Projects** lets you save, load, export, and import SCHEMA-RASPP work across sessions.
+Checkpoints capture session state at key workflow stages (contacts, RASPP results,
+applied crossovers, diversity pools, oligopool options, and more).
+
+**When to use Projects**
+
+| Situation | Action |
+|-----------|--------|
+| Starting a new design | Name your project on **SCHEMA Energy** (autosave uses it) or **Save Current Project** here |
+| Resuming later | **Load** a checkpoint from **All Projects** |
+| Backing up (especially Streamlit Cloud) | **Export** as JSON or ZIP, then download |
+| Sharing with a colleague | Export JSON/ZIP and send the file; they **Import** on their instance |
+| Cleaning up | **Validate** before trusting an old file; **Delete** when no longer needed |
+
+**Streamlit Cloud note:** server-side checkpoint folders can be lost on redeploy. After
+meaningful progress, **export your project** and keep a local copy.
+
+**Tabs**
+
+1. **All Projects** — browse, search, load, validate, export, or delete saved checkpoints.
+2. **Save Current Project** — write the current session to disk with an optional description.
+3. **Import Project** — upload a previously exported JSON or ZIP checkpoint.
+4. **Project Details** — inspect what data a checkpoint contains before loading.
+
+**Tips**
+
+- Export **JSON** for lightweight backups; **ZIP** includes auxiliary files when present.
+- Loading a project replaces relevant session keys — save first if you might want to undo.
+- The **Workflow Stage** column shows how far the project progressed (contacts, RASPP, etc.).
 """)
+
+if is_cloud_hosting():
+    render_cloud_persistence_notice()
 
 # Show current project if loaded
 if 'current_project' in st.session_state and st.session_state.get('current_project'):
@@ -107,7 +140,6 @@ with tab1:
             )
             
             # Action buttons for selected project
-            st.subheader("Project Actions")
             selected_project = st.selectbox(
                 "Select project for actions",
                 range(len(filtered_df)),
@@ -119,8 +151,9 @@ with tab1:
                 project_path = filtered_df.iloc[selected_project]['Path']
                 project_name = filtered_df.iloc[selected_project]['Project Name']
                 
-                col1, col2, col3, col4 = st.columns(4)
+                st.subheader("Project Actions")
                 
+                col1, col2 = st.columns(2)
                 with col1:
                     if st.button("📂 Load", use_container_width=True, key='load_selected_project'):
                         try:
@@ -131,48 +164,72 @@ with tab1:
                             st.error(f"Error loading: {str(e)}")
                 
                 with col2:
-                    if st.button("📦 Export", use_container_width=True, key='export_selected_project'):
-                        try:
-                            export_format = st.radio(
-                                "Format",
-                                ['zip', 'json'],
-                                key='export_format_selected',
-                                horizontal=True
-                            )
-                            output_path = export_checkpoint(project_path, format=export_format)
-                            st.success(f"✓ Exported: {Path(output_path).name}")
-                            
-                            # Download button
-                            with open(output_path, 'rb') as f:
-                                file_data = f.read()
-                                st.download_button(
-                                    label=f"📥 Download {export_format.upper()}",
-                                    data=file_data,
-                                    file_name=f"{project_name}.{export_format}",
-                                    mime="application/zip" if export_format == 'zip' else "application/json",
-                                    key='download_exported_selected'
-                                )
-                        except Exception as e:
-                            st.error(f"Error exporting: {str(e)}")
-                
-                with col3:
-                    if st.button("🗑️ Delete", use_container_width=True, key='delete_selected_project'):
-                        st.warning(f"⚠️ Are you sure you want to delete '{project_name}'?")
-                        if st.button("Confirm Delete", type="primary", key='confirm_delete'):
-                            try:
-                                delete_checkpoint(project_path)
-                                st.success(f"✓ Deleted: {project_name}")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error deleting: {str(e)}")
-                
-                with col4:
                     if st.button("✅ Validate", use_container_width=True, key='validate_selected_project'):
                         try:
                             validate_checkpoint(project_path)
                             st.success("✓ Checkpoint is valid")
                         except Exception as e:
                             st.error(f"Validation failed: {str(e)}")
+                
+                st.markdown("**Export**")
+                export_format = st.radio(
+                    "Format",
+                    ['zip', 'json'],
+                    key='export_format_selected',
+                    horizontal=True,
+                    help="JSON is recommended for backups on Streamlit Cloud.",
+                )
+                if st.button("📦 Prepare export", use_container_width=True, key='export_selected_project'):
+                    try:
+                        output_path = export_checkpoint(project_path, format=export_format)
+                        st.session_state['projects_export_ready'] = {
+                            'path': output_path,
+                            'name': project_name,
+                            'format': export_format,
+                        }
+                    except Exception as e:
+                        st.error(f"Error exporting: {str(e)}")
+                
+                export_ready = st.session_state.get('projects_export_ready')
+                if export_ready and export_ready.get('name') == project_name:
+                    try:
+                        with open(export_ready['path'], 'rb') as f:
+                            file_data = f.read()
+                        fmt = export_ready['format']
+                        st.download_button(
+                            label=f"📥 Download {fmt.upper()}",
+                            data=file_data,
+                            file_name=f"{project_name}.{fmt}",
+                            mime="application/zip" if fmt == 'zip' else "application/json",
+                            key='download_exported_selected',
+                            use_container_width=True,
+                        )
+                    except Exception as e:
+                        st.error(f"Could not read export file: {str(e)}")
+                
+                st.markdown("**Delete**")
+                pending_delete = st.session_state.get('projects_pending_delete')
+                if pending_delete != project_path:
+                    if st.button("🗑️ Delete project", use_container_width=True, key='delete_selected_project'):
+                        st.session_state['projects_pending_delete'] = project_path
+                        st.rerun()
+                else:
+                    st.warning(f"⚠️ Delete **{project_name}**? This cannot be undone.")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("Confirm delete", type="primary", key='confirm_delete'):
+                            try:
+                                delete_checkpoint(project_path)
+                                st.session_state.pop('projects_pending_delete', None)
+                                st.session_state.pop('projects_export_ready', None)
+                                st.success(f"✓ Deleted: {project_name}")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error deleting: {str(e)}")
+                    with c2:
+                        if st.button("Cancel", key='cancel_delete'):
+                            st.session_state.pop('projects_pending_delete', None)
+                            st.rerun()
 
 with tab2:
     st.header("Save Current Project")
@@ -205,7 +262,7 @@ with tab2:
         
         # Show what will be saved
         st.subheader("Data to Save")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             has_contacts = SESSION_KEYS['schema_contacts'] in st.session_state and st.session_state[SESSION_KEYS['schema_contacts']]
@@ -218,6 +275,24 @@ with tab2:
         with col3:
             has_raspp = SESSION_KEYS['raspp_results'] in st.session_state and st.session_state[SESSION_KEYS['raspp_results']]
             st.metric("RASPP Results", "✓" if has_raspp else "✗")
+        
+        with col4:
+            has_multi = SESSION_KEYS['multi_fragment_results'] in st.session_state and st.session_state[SESSION_KEYS['multi_fragment_results']]
+            st.metric("Multi-Fragment", "✓" if has_multi else "✗")
+
+        col5, col6, col7, col8 = st.columns(4)
+        with col5:
+            has_xo = bool(st.session_state.get("selected_crossover_positions"))
+            st.metric("Applied Crossovers", "✓" if has_xo else "✗")
+        with col6:
+            has_pools = bool(st.session_state.get("diversity_saved_selections"))
+            st.metric("Saved Pools", "✓" if has_pools else "✗")
+        with col7:
+            has_div = bool(st.session_state.get("diversity_analysis_result"))
+            st.metric("Diversity Analysis", "✓" if has_div else "✗")
+        with col8:
+            has_opt = bool(st.session_state.get("library_opt_results"))
+            st.metric("Library Optimization", "✓" if has_opt else "✗")
         
         if st.button("💾 Save Project", type="primary", key='save_new_project_btn'):
             from utils.session_manager import save_checkpoint
@@ -237,9 +312,8 @@ with tab3:
     st.header("Import Project")
     
     st.markdown("""
-    Import a project from a ZIP or JSON file. ZIP files contain the complete project
-    with all files, while JSON files contain metadata and session data (files must be
-    provided separately).
+    Import a project from a **JSON** or **ZIP** file exported from this app.
+    JSON is recommended for backups on Streamlit Cloud.
     """)
     
     imported_file = st.file_uploader(
@@ -260,27 +334,29 @@ with tab3:
         if st.button("📥 Import Project", type="primary", key='import_project_btn_main'):
             from utils.session_manager import import_checkpoint
             import tempfile
+            import shutil
             
             try:
-                # Save uploaded file temporarily
-                temp_dir = tempfile.mkdtemp()
-                temp_file = Path(temp_dir) / imported_file.name
-                with open(temp_file, 'wb') as f:
-                    f.write(imported_file.getbuffer())
+                temp_dir = tempfile.mkdtemp(prefix="schema_import_")
+                try:
+                    safe_name = _sanitize_import_filename(imported_file.name)
+                    temp_file = Path(temp_dir) / safe_name
+                    with open(temp_file, 'wb') as f:
+                        f.write(imported_file.getbuffer())
+                    
+                    project_path = import_checkpoint(
+                        str(temp_file),
+                        project_name=import_name if import_name else None
+                    )
+                finally:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
                 
-                # Import checkpoint
-                project_path = import_checkpoint(
-                    str(temp_file),
-                    project_name=import_name if import_name else None
-                )
                 st.success(f"✓ Project imported: {Path(project_path).name}")
                 
-                # Show import summary
                 metadata = get_checkpoint_metadata(Path(project_path).name)
                 if metadata:
                     st.json(metadata)
                 
-                # Option to load immediately
                 if st.button("📂 Load Imported Project", key='load_imported_main'):
                     metadata = load_checkpoint(project_path)
                     st.success(f"✓ Loaded: {metadata.get('project_name', 'Unknown')}")
@@ -288,9 +364,6 @@ with tab3:
                     
             except Exception as e:
                 st.error(f"Error importing project: {str(e)}")
-                import traceback
-                with st.expander("Error Details"):
-                    st.code(traceback.format_exc())
 
 with tab4:
     st.header("Project Details")
@@ -374,18 +447,39 @@ with tab4:
                             st.error(f"Error: {str(e)}")
                 
                 with col2:
+                    export_format_details = st.radio(
+                        "Export format",
+                        ['zip', 'json'],
+                        key='export_format_details',
+                        horizontal=True,
+                    )
                     if st.button("📦 Export This Project", use_container_width=True, key='export_details_project'):
                         try:
-                            export_format = st.radio(
-                                "Format",
-                                ['zip', 'json'],
-                                key='export_format_details',
-                                horizontal=True
-                            )
-                            output_path = export_checkpoint(project_path, format=export_format)
+                            output_path = export_checkpoint(project_path, format=export_format_details)
+                            st.session_state['projects_details_export'] = {
+                                'path': output_path,
+                                'format': export_format_details,
+                                'name': metadata.get('project_name', 'project'),
+                            }
                             st.success(f"✓ Exported: {Path(output_path).name}")
                         except Exception as e:
                             st.error(f"Error: {str(e)}")
+                    details_export = st.session_state.get('projects_details_export')
+                    if details_export and details_export.get('path'):
+                        try:
+                            with open(details_export['path'], 'rb') as f:
+                                data = f.read()
+                            fmt = details_export['format']
+                            st.download_button(
+                                f"📥 Download {fmt.upper()}",
+                                data=data,
+                                file_name=f"{details_export['name']}.{fmt}",
+                                mime="application/zip" if fmt == 'zip' else "application/json",
+                                key='download_details_export',
+                                use_container_width=True,
+                            )
+                        except Exception as e:
+                            st.error(str(e))
                 
                 with col3:
                     if st.button("✅ Validate", use_container_width=True, key='validate_details_project'):

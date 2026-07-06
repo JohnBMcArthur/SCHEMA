@@ -1,128 +1,71 @@
 # SCHEMA-RASPP Streamlit Application
 
-A web-based interface for the SCHEMA-RASPP protein recombination library design tool.
+A web-based interface for SCHEMA-RASPP protein recombination library design.
 
 ## Overview
 
-This Streamlit application provides an intuitive interface for protein engineers to design recombination libraries using structure-guided approaches. The app bundles the SCHEMA-RASPP modules and provides:
+This Streamlit app provides an end-to-end workflow:
 
-- **SCHEMA Energy Calculation**: Calculate disruption energies from protein structures
-- **RASPP Library Design**: Find optimal crossover points for library design
-- **Results Visualization**: Interactive plots and export capabilities
+1. **SCHEMA Energy** — BLAST/MUSCLE automation or manual PDB+MSA; SCHEMA contacts
+2. **RASPP Design** — Multi-fragment RASPP crossover optimization
+3. **Crossover Analysis** — Distribution, MSA, structure; **Apply crossover selection**
+4. **Assembly Analysis** — Query fragments and Golden Gate overhang assignment
+5. **Diversity Analysis** — Homolog MSA analysis; **Save main list to session**
+6. **Library Optimization** — Optional ESM2 + ridge regression (requires extra deps)
+7. **Simulate with AI** — Optional random chimera ESM2 simulation
+8. **Oligopool Design** — BsaI Golden Gate oligo design from saved pools
+9. **Projects** — Save, load, export, and import projects
 
-## Installation
+## Local installation
 
-1. **Install Python dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Run the application:**
-   ```bash
-   streamlit run app.py
-   ```
-
-3. **Open your browser** to the URL shown in the terminal (typically `http://localhost:8501`)
-
-## Usage
-
-### Page 1: SCHEMA Energy Calculation
-
-1. Upload a PDB structure file
-2. Upload a multiple sequence alignment (MSA) file
-3. Optionally upload a PDB-parent alignment file
-4. Set contact distance threshold (default: 5.0 Å)
-5. Click "Calculate SCHEMA Contacts"
-6. Optionally upload crossover points file and calculate energies
-
-### Page 2: RASPP Library Design
-
-1. Use SCHEMA contacts from Page 1, or upload MSA and contact files
-2. Set number of crossovers and minimum fragment diversity
-3. Click "Run RASPP Algorithm"
-4. View optimal crossover designs
-
-### Page 3: Results Visualization
-
-1. View RASPP curves and energy distributions
-2. Compare different designs
-3. Export results as CSV, JSON, or text files
-
-## File Formats
-
-### PDB File
-Standard Protein Data Bank format (.pdb)
-
-### MSA File
-Multiple sequence alignment in ALN format:
-```
-SEQ1  MKTAYIAKQR...
-SEQ2  MKTAYIAKQR...
+```bash
+pip install -r requirements.txt
+streamlit run app.py
 ```
 
-### Contact File
-Space-separated contact positions:
-```
-i j ri rj
-```
+Optional ESM2 features:
 
-### Crossover File
-Space-separated crossover positions:
-```
-10 20 30
+```bash
+pip install -r requirements-optimization.txt
 ```
 
-## Example Files
+## Streamlit Community Cloud deployment
 
-Example files are provided in the `examples/` directory:
-- `1G68.pdb` - Example PDB structure
-- `lac-msa.txt` - Example MSA file
-- `PSE4-1G68.txt` - Example crossover points
+1. Push this repository to GitHub (do not commit `checkpoints/` — it is in `.gitignore`).
+2. Create a new app on [Streamlit Community Cloud](https://streamlit.io/cloud) pointing to `app.py`.
+3. Add **Secrets** (Settings → Secrets):
 
-## Dependencies
+```toml
+EBI_EMAIL = "johnbmcarthur@gmail.com"
+SCHEMA_HOSTING = "cloud"
+```
 
-- streamlit >= 1.28.0
-- numpy >= 1.24.0
-- matplotlib >= 3.7.0
-- plotly >= 5.14.0
-- pandas >= 2.0.0
+4. Use base `requirements.txt` only unless your tier has enough RAM for PyTorch/ESM2.
+5. **Export projects** from the **Projects** page after each session. Server-side checkpoints are **ephemeral** and are lost on redeploy.
 
-## Features
+## Required workflow clicks
 
-### Automated Workflow
-- **Single Sequence Input**: Enter a protein sequence and the app will:
-  - Automatically find similar sequences via EBI BLAST against AlphaFold database
-  - Select diverse sequences (randomly, with <90% identity between pairs)
-  - Align sequences using EBI MUSCLE API (no local installation needed)
-  - Find best matching AlphaFold structure automatically
-  - Calculate SCHEMA contacts
-- **Multi-Fragment Testing**: Automatically test fragment counts from 5-20 to find optimal library designs
-- **Progress Tracking**: Real-time progress updates with time estimates
+| Step | Page | Action |
+|------|------|--------|
+| Apply crossovers | Crossover Analysis | **Apply crossover selection** |
+| Save homolog pools | Diversity / Library Optimization | **Save main list to session** |
+| Backup project | Projects | **Export** (JSON recommended) |
 
-### Manual Workflow
-- Upload your own PDB, MSA, and crossover files
-- Full control over all parameters
+## Data files
 
-### Code Organization
-- **Centralized Configuration**: All constants and session state keys in `utils/config.py`
-- **Session Management**: Proper initialization and cleanup via `utils/session_manager.py`
-- **Temp File Management**: Automatic cleanup of temporary files
-- **Error Handling**: Comprehensive error handling throughout
-- **Progress Feedback**: Time estimates for long-running operations
+Shipped with the repo:
 
-## Notes
+- `data/gga_aa_pair_compatibility.yaml` — Golden Gate overhang compatibility
+- `data/stuffer_sequences.yaml` — Precomputed oligopool stuffer sequences
 
-- The SCHEMA-RASPP modules are bundled in the `schema_raspp/` package
-- Original SCHEMA-RASPP code is from: https://github.com/mattasmith/SCHEMA-RASPP
-- Alignment uses EBI MUSCLE REST API (no local MUSCLE installation required)
-- BLAST searches use EBI BLAST API against AlphaFold database (more reliable than NCBI)
-- Structures are downloaded from AlphaFold database (complete structures, no missing residues)
-- Sequence selection ensures diversity (<90% identity between selected sequences)
+## Example files
+
+See `examples/` for sample PDB, MSA, and crossover inputs.
 
 ## References
 
-- Voigt, C. et al., "Protein building blocks preserved by recombination," Nature Structural Biology 9(7):553-558 (2002)
-- Endelman, J. et al., "Site-directed protein recombination as a shortest-path problem," Protein Engineering, Design & Selection 17(7):589-594 (2005)
+- Voigt, C. et al., *Nature Structural Biology* 9(7):553-558 (2002)
+- Endelman, J. et al., *Protein Engineering, Design & Selection* 17(7):589-594 (2005)
 
 ## License
 

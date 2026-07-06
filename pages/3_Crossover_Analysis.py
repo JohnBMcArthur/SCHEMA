@@ -384,12 +384,59 @@ for _legacy_key in (
 ):
     st.session_state.pop(_legacy_key, None)
 
-st.title("🧩 Crossover analysis")
+st.title("🧩 Crossover Analysis")
 
-st.markdown(
-    "Inspect crossover placements and the parent structure for designs produced on the "
-    "**RASPP Design** page."
-)
+st.markdown("""
+**Crossover Analysis** helps you choose **where to cut** the parent protein when building
+chimeras. It summarizes crossover positions from your **RASPP Design** runs, lets you
+compare designs on a frequency plot, and commits a final set of positions for the rest of
+the pipeline.
+
+**Prerequisite:** run **2. RASPP Design** (**Run Multi-Fragment Analysis**) so
+`multi_fragment_results` and parent sequences are in session. Optionally, complete
+**1. SCHEMA Energy** with a PDB so the **3D structure** viewer can color fragments
+red/green.
+
+**What this page shows:**
+
+- **Crossover position distribution** — how often each alignment-column position appears
+  as a crossover among RASPP designs (after your filters).
+- **Frequency table** — high-frequency positions you can check to include in your library.
+- **MSA with crossover markers** — appears only **after** you apply a selection.
+- **Structure viewer** — parent cartoon colored by fragment between applied crossovers.
+
+**Important: draft vs. applied selection**
+
+Checking boxes, typing manual positions, or clicking the chart only stages a **draft**.
+Downstream pages (**Assembly**, **Diversity**, **Oligopool**) read
+`selected_crossover_positions` only after you click **Apply crossover selection**.
+
+| Action | Updates draft? | Updates downstream pipeline? |
+|--------|----------------|------------------------------|
+| Checkbox / manual text / chart click | Yes | No |
+| **Apply crossover selection** | Commits draft | **Yes** |
+| **Clear selection** | Clears applied | **Yes** (empties selection) |
+
+**Steps:**
+
+1. **Filter designs** — use the fragment-count slider (and optionally the energy % slider
+   on the distribution) to focus on library sizes and energies you care about.
+2. **Pick crossovers** — check positions in the frequency table, add comma-separated
+   **1-based** positions in the text field, and/or click bars on the distribution chart
+   (chart picks are also pending until Apply).
+3. Click **Apply crossover selection**. Confirm the **Applied positions** caption lists
+   what you expect.
+4. Review the **MSA** and **structure** views (they reflect the applied set only).
+5. *(Optional)* **Save / load selected crossovers** — export TXT/JSON or reload a saved
+   selection from the expander.
+
+**Position numbering:** crossover positions are **1-based alignment column indices**
+(the same frame as SCHEMA contacts and the MSA markers), not raw PDB residue numbers.
+
+**Next step:** go to **4. Assembly Analysis** to split the query sequence at applied
+crossovers and assign Golden Gate overhangs, then continue to Diversity and Oligopool.
+Do not skip **Apply** — Assembly will warn if no crossovers are applied.
+""")
 
 has_raspp = (
     SESSION_KEYS["raspp_results"] in st.session_state

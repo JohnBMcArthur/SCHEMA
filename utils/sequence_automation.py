@@ -11,7 +11,7 @@ import random
 from Bio import AlignIO
 from xml.etree import ElementTree
 
-from utils.config import BLAST_PARAMS, EBI_API_PARAMS, ALPHAFOLD_PARAMS
+from utils.config import BLAST_PARAMS, EBI_API_PARAMS, ALPHAFOLD_PARAMS, get_ebi_email
 from utils.sequence_utils import calculate_identity, extract_uniprot_id, clean_sequence_id
 from utils.temp_file_manager import temp_file_manager
 
@@ -44,7 +44,7 @@ def blast_search_sequences(query_sequence, num_sequences=10, min_identity=0.5, m
         # Use EBI BLAST API (more reliable, provides progress updates)
         url = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast/run"
         data = {
-            "email": "johnbmcarthur@gmail.com",
+            "email": get_ebi_email(),
             "program": "blastp",
             "matrix": "BLOSUM62",
             "alignments": 1000,
@@ -460,7 +460,7 @@ def align_sequences_ebi_muscle(sequences, output_file=None, progress_callback=No
         response = requests.post(
             url,
             data={
-                'email': EBI_API_PARAMS['email'],
+                'email': get_ebi_email(),
                 'sequence': fasta_data,
                 'format': 'fasta',
                 'stype': 'protein'
@@ -725,7 +725,7 @@ def find_alphafold_structure(sequence, progress_callback=None):
         # Submit EBI BLAST job against AlphaFold database
         url = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast/run"
         data = {
-            "email": "johnbmcarthur@gmail.com",
+            "email": get_ebi_email(),
             "program": "blastp",
             "matrix": "BLOSUM62",
             "alignments": 1000,
@@ -737,7 +737,7 @@ def find_alphafold_structure(sequence, progress_callback=None):
             "align": 0,
             "stype": "protein",
             "sequence": sequence,
-            "database": "afdb"  # AlphaFold database
+            "database": "afdb",  # AlphaFold database
         }
         
         response = requests.post(url, data=data, timeout=30)

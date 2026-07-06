@@ -46,6 +46,10 @@ from utils.gga_overhangs import (
     load_gga_compatibility,
 )
 from utils.session_manager import init_session_state
+from utils.workflow_state import (
+    invalidate_diversity_if_upstream_changed,
+    render_crossover_required_banner,
+)
 
 st.set_page_config(
     page_title="Diversity Analysis",
@@ -515,14 +519,79 @@ def _load_progress_callback() -> None:
         st.session_state["_diversity_progress_error"] = str(exc)
 
 
+if invalidate_diversity_if_upstream_changed():
+    st.warning(
+        "Crossovers or Assembly Analysis options changed since the last diversity run. "
+        "Re-analyze your MSA if results look stale."
+    )
+render_crossover_required_banner()
+
 st.title("🌿 Diversity Analysis")
 
-st.markdown(
-    "Upload a homolog MSA (FASTA) that **includes the session query sequence** as one of the "
-    "aligned rows (a sequence ID containing `query` is preferred). Fragments are extracted "
-    "from shared MSA columns, then filtered by **Golden Gate compatible terminal residues** "
-    "from **Assembly Analysis** overhangs."
-)
+st.markdown("""
+**Diversity Analysis** mines **natural sequence diversity** for each assembly fragment. You
+upload a **large homolog multiple sequence alignment (MSA)**; the app extracts fragment
+sequences per homolog, enforces **Golden Gate terminal compatibility** from **Assembly
+Analysis**, and lets you filter and explore candidates with a **Sequence Similarity Network
+(SSN)** before saving pools for oligo design.
+
+**Two different MSAs — by design**
+
+| | SCHEMA-RASPP MSA (steps 1–3) | Diversity MSA (this page) |
+|---|------------------------------|---------------------------|
+| **When** | SCHEMA Energy → RASPP Design | Uploaded here |
+| **Size** | **Small** — query plus a handful of diverse parents (automated workflow: typically 5–20 BLAST hits; manual: your SCHEMA parent set) | **As large as practical** — hundreds to thousands of homologs when available |
+| **Purpose** | Structure–alignment mapping, SCHEMA contacts, crossover recommendations | Variant pools for each fragment in your library |
+| **Why small?** | SCHEMA energy and RASPP scans are expensive; a compact, diverse parent set is enough to find good crossover regions | You need breadth of natural variation at each block to build a useful combinatorial library |
+
+The MSA from SCHEMA Energy is **not** reused here on purpose: crossover design benefits from a
+focused parent set, while library design benefits from the widest homolog coverage you can
+align reliably. Build or download a family-wide alignment (e.g. broader BLAST, UniRef cluster,
+or curated family MSA), then upload it below.
+
+**Prerequisites:**
+
+1. **1. SCHEMA Energy** — session **query sequence** (the same protein you will include in
+   the diversity MSA).
+2. **3. Crossover Analysis** — click **Apply crossover selection**.
+3. **4. Assembly Analysis** — review Golden Gate overhangs; terminal residue filters on this
+   page are derived from those assignments.
+
+**What this page does:**
+
+1. **Upload homolog MSA (FASTA)** — all rows same alignment length; one row must match the
+   session query (IDs containing `query` are preferred).
+2. **Extract fragments** — for each homolog, slice MSA columns corresponding to each assembly
+   fragment on the query row.
+3. **GGA terminal filter** — drop homologs whose fragment ends are incompatible with assigned
+   overhangs (see *Assembly fragment filters* expander).
+4. **Per-fragment viewer** — main list table, numeric filters, SSN to spot redundancy or
+   outliers, and aligned Q/H preview for selected nodes.
+5. **Save main list to session** — commits filtered homologs per fragment for **Oligopool
+   Design** (and optional **Library Optimization** / **Simulate with AI**).
+
+**MSA requirements**
+
+- **Aligned FASTA** (`.fasta`, `.fa`, `.fas`, `.txt`) with equal-length rows.
+- **Include the query** as an aligned row matching the session query exactly (ungapped
+  sequence). Rename with `query` in the ID if auto-detection fails.
+- **Re-align if needed** — fragment boundaries come from the **query row columns** defined by
+  your applied crossovers; homologs must share that alignment frame.
+- Prefer **more sequences** over fewer; filter down on this page rather than limiting the
+  upload.
+
+**Steps:**
+
+1. Confirm prerequisites (crossovers applied, assembly overhangs look correct).
+2. **Upload** your large homolog MSA.
+3. For each **fragment**, review the main list; adjust **filters** and use **Build network**
+   to explore the SSN. Exclude redundant or unwanted homologs via the network preview.
+4. Click **Save main list to session** when pools are ready (required before Oligopool Design).
+5. *(Optional)* Download or upload **progress JSON** to resume filtering later.
+
+**Next step:** **7. Oligopool Design** — designs oligos from the saved per-fragment homolog
+lists. Run **8. Library Optimization** first if you want to prune the combinatorial space.
+""")
 
 crossovers = list(st.session_state.get("selected_crossover_positions") or [])
 session_aligned, session_source = get_aligned_query_sequence()
@@ -585,6 +654,10 @@ with st.expander("Assembly fragment filters (from session overhangs)", expanded=
 
 st.markdown("---")
 st.subheader("Upload homolog MSA (FASTA)")
+st.caption(
+    "Use your **broadest** reliable family alignment here — not the small SCHEMA-RASPP parent "
+    "MSA from step 1. The query row must match the session query."
+)
 
 uploaded = st.file_uploader(
     "Upload aligned FASTA",
@@ -593,7 +666,10 @@ uploaded = st.file_uploader(
 )
 
 if uploaded is None and not st.session_state.get("diversity_analysis_result"):
-    st.info("Upload a FASTA MSA to begin diversity analysis.")
+    st.info(
+        "Upload a large homolog FASTA MSA to begin. Include the session query as one aligned "
+        "row; fragment extraction and GGA filtering run automatically after upload."
+    )
     st.stop()
 
 _process_new_msa_upload(

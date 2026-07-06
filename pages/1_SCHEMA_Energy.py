@@ -20,9 +20,9 @@ from utils.schema_wrapper import (
     calculate_contacts, calculate_energies, save_contacts
 )
 from utils.visualization import plot_contact_map, plot_energy_distribution
-from utils.session_manager import init_session_state, has_required_data
-from utils.temp_file_manager import temp_file_manager
-from utils.config import DEFAULTS, SESSION_KEYS
+from utils.session_manager import init_session_state
+from utils.workflow_state import clear_downstream_from_contacts
+from utils.config import DEFAULTS, SESSION_KEYS, SCHEMA_DEBUG
 
 st.set_page_config(
     page_title="SCHEMA Energy",
@@ -36,15 +36,15 @@ init_session_state()
 st.title("⚡ SCHEMA Energy Calculation")
 
 st.markdown("""
-Calculate SCHEMA disruption energies for chimeric proteins. Upload your protein 
-structure (PDB file) and multiple sequence alignment (MSA) to begin.
+This page identifies **SCHEMA contacts** — pairs of residues whose interaction would be
+disrupted if they end up on opposite sides of a crossover in a chimera. Those contacts
+power **RASPP Design** (step 2) and the rest of the pipeline.
 
-**Workflow:**
-1. Upload PDB structure file and MSA file
-2. Optionally upload PDB-parent alignment file
-3. Set contact distance threshold
-4. Calculate SCHEMA contacts
-5. Upload crossover points file to calculate energies
+After contacts are calculated, a **contact map** appears below. You can **download**
+the contacts file for your records. In **manual** mode you may also upload a crossover
+points file to estimate SCHEMA disruption energies for specific chimeras (optional).
+
+Choose an input method below.
 """)
 
 # Default parameters for contacts (prefer existing session values when available)
@@ -98,10 +98,32 @@ st.header("Input Method")
 workflow_mode = st.radio(
     "Choose workflow mode",
     ["Automated (Enter Sequence)", "Manual (Upload Files)"],
-    help="Automated mode: Enter a sequence and we'll find similar sequences, align them, and find PDB structure. Manual mode: Upload your own files."
+    help="Automated: BLAST + MUSCLE + AlphaFold from a single sequence. Manual: bring your own PDB and MSA.",
 )
 
 if workflow_mode == "Automated (Enter Sequence)":
+    st.markdown("""
+**Automated workflow**
+
+Best when you have a **query protein sequence** but not yet an MSA or structure. The app
+will:
+
+1. **BLAST** your sequence against the AlphaFold database (EBI) to find diverse homologs
+   (identity filters are adjustable in *Automated Workflow Parameters*).
+2. **Align** the query plus homologs with EBI MUSCLE to build an MSA.
+3. **Download** an AlphaFold PDB for the top BLAST hit (or the best match to your query).
+4. **Calculate SCHEMA contacts** by aligning the structure to the MSA and detecting
+   residue pairs within the contact distance threshold (default 5.0 Å).
+
+**What you need:** a project name (recommended), your query sequence (≥ 20 amino acids),
+and patience — BLAST and alignment can take several minutes.
+
+**If no structure is found:** upload a PDB manually in the section below; the MSA from
+step 2 is already in session.
+
+**Next step:** go to **2. RASPP Design** once contacts are calculated successfully.
+    """)
+
     # Project name input
     st.subheader("Name Project")
     project_name_input = st.text_input(
@@ -168,7 +190,6 @@ if workflow_mode == "Automated (Enter Sequence)":
                     try:
                         from utils.sequence_automation import (
                             blast_search_sequences, align_sequences_ebi_muscle,
-                            find_pdb_structure
                         )
                         from utils.raspp_wrapper import streamlit_progress_callback
                         
@@ -189,178 +210,6 @@ if workflow_mode == "Automated (Enter Sequence)":
                             max_identity=max_identity,
                             progress_callback=lambda p, m: callback(0.05 + p * 0.2, f"BLAST: {m}")
                         )
-                        
-                        # Display BLAST TSV results for debugging
-                        st.markdown("---")
-                        st.subheader("🔍 BLAST TSV Results (Debug)")
-                        if tsv_data:
-                            st.info(f"TSV data length: {len(tsv_data)} characters, {len(tsv_data.split(chr(10)))} lines")
-                            # Parse and analyze TSV
-                            try:
-                                import pandas as pd
-                                lines = tsv_data.strip().split('\n')
-                                
-                                # Detect format by checking header
-                                header_line = None
-                                for line in lines:
-                                    if line.strip() and not line.startswith('#'):
-                                        header_line = line
-                                        break
-                                
-                                use_alt_format = False
-                                if header_line and 'Hit' in header_line and 'Accession' in header_line:
-                                    use_alt_format = True
-                                
-                                # Skip comment lines and header
-                                data_lines = [line for line in lines if line and not line.startswith('#') and line != header_line]
-                                
-                                if data_lines:
-                                    # Parse TSV based on detected format
-                                    rows = []
-                                    filtered_by_identity = []
-                                    filtered_by_evalue = []
-                                    passed_initial = []
-                                    
-                                    for line in data_lines:
-                                        fields = line.split('\t')
-                                        
-                                        if use_alt_format:
-                                            # Alternative format: Hit, DB, Accession, Description, Organism, Length, Score(Bits), Identities(%), Positives(%), E()
-                                            # Note: Description may contain tabs, so parse from the right
-                                            if len(fields) < 10:
-                                                continue
-                                            
-                                            try:
-                                                # Parse from the right since last columns are fixed
-                                                evalue_str = fields[-1].strip()  # Last column: E()
-                                                identity_str = fields[-3].rstrip('%').strip()  # Third to last: Identities(%)
-                                                score_str = fields[-4].strip()  # Score(Bits)
-                                                length_str = fields[-5].strip()  # Length
-                                                
-                                                # Accession is always column 2
-                                                subject_acc = fields[2]  # Accession
-                                                
-                                                identity_pct = float(identity_str)
-                                                evalue = float(evalue_str) if evalue_str else 1e5
-                                                
-                                                row_data = {
-                                                    'Hit': fields[0],
-                                                    'Accession': subject_acc,
-                                                    'Identity %': f"{identity_pct:.2f}",
-                                                    'E-value': f"{evalue:.2e}",
-                                                    'Score': score_str,
-                                                    'Length': length_str,
-                                                    'Description': ' '.join(fields[3:-5])[:50] if len(fields) > 8 else ''  # Description is everything between Accession and Organism
-                                                }
-                                                rows.append(row_data)
-                                                
-                                                # Check filters (outside try/except so it runs for successfully parsed rows)
-                                                min_identity_pct = min_identity * 100
-                                                max_identity_pct = max_identity * 100
-                                                
-                                                if evalue > 1e-5:
-                                                    filtered_by_evalue.append(row_data)
-                                                elif identity_pct < min_identity_pct or identity_pct >= max_identity_pct:
-                                                    filtered_by_identity.append(row_data)
-                                                else:
-                                                    passed_initial.append(row_data)
-                                            except (ValueError, IndexError):
-                                                continue  # Skip if can't parse
-                                        else:
-                                            # Standard format: query acc, subject acc, identity, alignment length, 
-                                            # mismatches, gap opens, q. start, q. end, s. start, s. end, evalue, bit score
-                                            if len(fields) >= 12:
-                                                identity_pct = float(fields[2])
-                                                evalue = float(fields[10])
-                                                
-                                                row_data = {
-                                                    'Query': fields[0],
-                                                    'Subject': fields[1],
-                                                    'Identity %': f"{identity_pct:.2f}",
-                                                    'E-value': f"{evalue:.2e}",
-                                                    'Bit Score': fields[11],
-                                                    'Alignment Length': fields[3]
-                                                }
-                                                rows.append(row_data)
-                                                
-                                                # Check filters
-                                                min_identity_pct = min_identity * 100
-                                                max_identity_pct = max_identity * 100
-                                                
-                                                if evalue > 1e-5:
-                                                    filtered_by_evalue.append(row_data)
-                                                elif identity_pct < min_identity_pct or identity_pct >= max_identity_pct:
-                                                    filtered_by_identity.append(row_data)
-                                                else:
-                                                    passed_initial.append(row_data)
-                                    
-                                    # Show summary statistics
-                                    col1, col2, col3, col4 = st.columns(4)
-                                    with col1:
-                                        st.metric("Total Hits", len(rows))
-                                    with col2:
-                                        st.metric("Passed E-value", len(rows) - len(filtered_by_evalue))
-                                    with col3:
-                                        st.metric("Passed Identity Filter", len(passed_initial))
-                                    with col4:
-                                        st.metric("Selected Sequences", len(sequences) - 1)  # -1 for query
-                                    
-                                    # Show filtered out by identity
-                                    if filtered_by_identity:
-                                        st.warning(f"⚠️ {len(filtered_by_identity)} hits filtered by identity range ({min_identity:.0%}-{max_identity:.0%})")
-                                        with st.expander(f"View {len(filtered_by_identity)} hits filtered by identity", expanded=False):
-                                            df_filtered = pd.DataFrame(filtered_by_identity[:20])  # Show first 20
-                                            st.dataframe(df_filtered, use_container_width=True)
-                                    
-                                    # Show filtered out by e-value
-                                    if filtered_by_evalue:
-                                        st.info(f"ℹ️ {len(filtered_by_evalue)} hits filtered by e-value (>{1e-5})")
-                                    
-                                    # Show hits that passed initial filters
-                                    if passed_initial:
-                                        st.success(f"✓ {len(passed_initial)} hits passed initial filters (identity: {min_identity:.0%}-{max_identity:.0%}, e-value: ≤1e-5)")
-                                        with st.expander(f"View {len(passed_initial)} hits that passed initial filters", expanded=True):
-                                            df_passed = pd.DataFrame(passed_initial[:50])  # Show first 50
-                                            st.dataframe(df_passed, use_container_width=True)
-                                    
-                                    # Show all hits table
-                                    with st.expander("View All BLAST Hits", expanded=False):
-                                        df = pd.DataFrame(rows)
-                                        st.dataframe(df, use_container_width=True)
-                                    
-                                    # Show full TSV as code
-                                    with st.expander("View Full TSV Data (Raw)", expanded=False):
-                                        st.code(tsv_data, language='text')
-                            except Exception as e:
-                                st.warning(f"Could not parse TSV as table: {str(e)}")
-                                # Fallback: show raw TSV
-                                with st.expander("View Full TSV Data", expanded=True):
-                                    st.code(tsv_data, language='text')
-                        else:
-                            if tsv_error:
-                                st.error(f"❌ TSV retrieval failed: {tsv_error}")
-                                st.info("ℹ️ Using XML fallback for BLAST results parsing")
-                                
-                                # Show what we got from TSV attempt (tsv_response may not exist when TSV failed)
-                                with st.expander("TSV Response Details", expanded=True):
-                                    st.code(f"TSV request failed. Error: {tsv_error}\n\nUsing XML fallback for BLAST results.", language='text')
-                            else:
-                                st.warning("No TSV data available (may have used XML fallback)")
-                            
-                            # Show debug info about sequences found
-                            st.info(f"**Debug Info:**")
-                            st.write(f"- Sequences found: {len(sequences)}")
-                            st.write(f"- Candidate hits processed: Check BLAST job status")
-                            st.write(f"- Identity filters: {min_identity:.0%} ≤ identity < {max_identity:.0%}")
-                            
-                            # Show what sequences were found
-                            if len(sequences) > 1:
-                                st.success(f"✓ Found {len(sequences)-1} additional sequences beyond query")
-                                with st.expander("View Selected Sequences"):
-                                    for seq_id, seq in sequences:
-                                        st.text(f"{seq_id}: {seq[:100]}...")
-                            else:
-                                st.error("⚠️ Only query sequence found - no additional sequences passed filters")
                         
                         # Validate that we have enough sequences for alignment
                         if not sequences or len(sequences) < 2:
@@ -384,15 +233,15 @@ if workflow_mode == "Automated (Enter Sequence)":
                         # Step 2: Alignment
                         callback(0.3, f"Step 2/4: Aligning {len(sequences)} sequences using EBI MUSCLE API...")
                         
-                        # Debug: Show FASTA format before alignment
-                        with st.expander("🔍 Debug: FASTA Sequences (for troubleshooting)", expanded=False):
-                            st.markdown("**Sequences in FASTA format that will be sent to EBI MUSCLE API:**")
-                            fasta_preview = ""
-                            for seq_id, seq in sequences:
-                                clean_id = seq_id.replace(' ', '_').replace('|', '_')
-                                fasta_preview += f">{clean_id}\n{seq}\n"
-                            st.code(fasta_preview, language='fasta')
-                            st.info(f"Total sequences: {len(sequences)} | Total characters: {len(fasta_preview)}")
+                        if SCHEMA_DEBUG:
+                            with st.expander("🔍 Debug: FASTA Sequences (for troubleshooting)", expanded=False):
+                                st.markdown("**Sequences in FASTA format that will be sent to EBI MUSCLE API:**")
+                                fasta_preview = ""
+                                for seq_id, seq in sequences:
+                                    clean_id = seq_id.replace(' ', '_').replace('|', '_')
+                                    fasta_preview += f">{clean_id}\n{seq}\n"
+                                st.code(fasta_preview, language='fasta')
+                                st.info(f"Total sequences: {len(sequences)} | Total characters: {len(fasta_preview)}")
                         
                         msa_file = align_sequences_ebi_muscle(
                             sequences,
@@ -444,6 +293,7 @@ if workflow_mode == "Automated (Enter Sequence)":
                             
                             # Store in session state
                             st.session_state.schema_contacts = contacts_result
+                            clear_downstream_from_contacts()
                             # Use trimmed MSA file if available (domain boundaries applied)
                             st.session_state.msa_path = contacts_result.get('trimmed_msa_file', msa_file)
                             st.session_state.pdb_path = pdb_file
@@ -486,9 +336,6 @@ if workflow_mode == "Automated (Enter Sequence)":
                         
                     except Exception as e:
                         st.error(f"Error in automated workflow: {str(e)}")
-                        import traceback
-                        with st.expander("Error Details"):
-                            st.code(traceback.format_exc())
     
     # Manual PDB upload option (if automated workflow didn't find one)
     if 'msa_path' in st.session_state and ('pdb_path' not in st.session_state or st.session_state.get('pdb_path') is None):
@@ -518,6 +365,7 @@ if workflow_mode == "Automated (Enter Sequence)":
                 )
                 
                 st.session_state[SESSION_KEYS['schema_contacts']] = contacts_result
+                clear_downstream_from_contacts()
                 st.session_state[SESSION_KEYS['pdb_path']] = pdb_path
                 # Update MSA path to trimmed version if available
                 if contacts_result.get('trimmed_msa_file'):
@@ -541,6 +389,31 @@ if workflow_mode == "Automated (Enter Sequence)":
 
 else:
     # Manual file upload mode
+    st.markdown("""
+**Manual workflow**
+
+Best when you already have a **PDB structure** and **multiple sequence alignment (MSA)**
+for your parents. The app aligns the structure to the MSA (via schemarecomb), trims to
+the shared domain if needed, and computes SCHEMA contacts.
+
+**What you need:**
+
+- **PDB file** — structure of the query (or reference) protein.
+- **MSA file** — aligned parent sequences (`.txt`, `.fasta`, `.aln`, etc.).
+- **Crossover points file** *(optional)* — whitespace-separated crossover positions if you
+  want SCHEMA **disruption energies** for specific chimeras on this page. If you skip this,
+  you can still proceed to RASPP and choose crossovers later.
+
+**Steps:**
+
+1. Enter a project name (recommended for autosave).
+2. Upload PDB and MSA, validate messages appear, then click **Calculate SCHEMA Contacts**.
+3. Review the **contact map** below; download the contacts file if needed.
+4. *(Optional)* If you uploaded a crossover file, click **Calculate SCHEMA Energies**.
+
+**Next step:** go to **2. RASPP Design** once contacts are in session.
+    """)
+
     # Project name input
     st.subheader("Name Project")
     project_name_input_manual = st.text_input(
@@ -647,14 +520,7 @@ else:
                     st.success("✓ SCHEMA contacts calculated successfully!")
                     
                     # Reset downstream RASPP state so new contacts start a fresh design workflow
-                    for key in [
-                        SESSION_KEYS['raspp_results'],
-                        SESSION_KEYS['raspp_raw_results'],
-                        SESSION_KEYS['raspp_parents'],
-                        SESSION_KEYS['multi_fragment_results'],
-                    ]:
-                        if key in st.session_state:
-                            del st.session_state[key]
+                    clear_downstream_from_contacts()
                     
                     # Display contact statistics
                     num_contacts = len(contacts_result['contacts'])
@@ -690,357 +556,8 @@ else:
                     # Autosave after contacts calculated (manual mode)
                     from utils.session_manager import auto_save
                     auto_save("contacts_calculated")
-                    
-                    from utils.session_manager import render_save_project_ui
-                    render_save_project_ui('save_contacts_btn')
                 except Exception as e:
                     st.error(f"Error calculating contacts: {str(e)}")
-
-# Display structure viewer and contact editing if available
-contacts_data = st.session_state.get(SESSION_KEYS['schema_contacts'])
-if contacts_data and isinstance(contacts_data, dict) and contacts_data.get('contacts') is not None:
-    contacts = contacts_data['contacts']
-    
-    # Check if we have PDB structure and path
-    pdb_structure = contacts_data.get('pdb_structure')
-    pdb_path = st.session_state.get(SESSION_KEYS['pdb_path'])
-    pdb_id = st.session_state.get(SESSION_KEYS['pdb_id'])  # UniProt ID for AlphaFold
-    
-    if pdb_structure:
-        st.header("Structure Viewer & Contact Editor")
-        
-        try:
-            from streamlit_molstar import st_molstar
-            from utils.structure_viewer import (
-                precompute_nearby_residues, get_contacts_for_residue,
-                update_contacts, get_pdb_file_content, create_colored_pdb_content
-            )
-
-            # Validate that contact indices match the current structure
-            valid_indices = set(aa.index for aa in pdb_structure.amino_acids)
-            invalid_contacts = []
-            for contact in contacts:
-                if len(contact) >= 2:
-                    i, j = contact[0], contact[1]
-                    if i not in valid_indices or j not in valid_indices:
-                        invalid_contacts.append((i, j))
-            
-            if invalid_contacts:
-                st.warning(f"""
-                ⚠️ **Contact/Structure Mismatch Detected**
-                
-                {len(invalid_contacts)} contacts reference residues not in the current structure.
-                This usually happens when loading a project saved with different alignment settings.
-                
-                **Structure residue range:** {min(valid_indices)} - {max(valid_indices)} ({len(valid_indices)} residues)
-                **Invalid contact indices include:** {invalid_contacts[:5]}{'...' if len(invalid_contacts) > 5 else ''}
-                """)
-                
-                # Offer to recalculate contacts from the current structure
-                if st.button("🔄 Recalculate Contacts from Current Structure", type="primary"):
-                    with st.spinner("Recalculating contacts..."):
-                        try:
-                            from utils.schemarecomb_bridge import contacts_from_pdb_structure
-                            new_contacts = contacts_from_pdb_structure(pdb_structure)
-                            
-                            # Update contacts in contacts_data
-                            contacts_data['contacts'] = [(i, j, None, None) for i, j in new_contacts]
-                            st.session_state[SESSION_KEYS['schema_contacts']] = contacts_data
-                            
-                            # Clear edited_contacts to reload from new contacts
-                            if 'edited_contacts' in st.session_state:
-                                del st.session_state['edited_contacts']
-                            
-                            st.success(f"✓ Recalculated {len(new_contacts)} contacts from structure")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error recalculating contacts: {str(e)}")
-            
-            # Create a unique viewer ID based on structure to avoid key conflicts
-            # Use PDB ID or structure hash to make it unique per structure
-            import hashlib
-            if pdb_id:
-                structure_id = pdb_id
-            else:
-                # Create hash from structure characteristics
-                structure_str = f"{len(pdb_structure.amino_acids)}_{pdb_structure.amino_acids[0].index if pdb_structure.amino_acids else 0}"
-                structure_id = hashlib.md5(structure_str.encode()).hexdigest()[:8]
-            
-            # Use a stable key that doesn't change on reruns
-            # Include a unique identifier to ensure no conflicts
-            # Use structure hash + first few residues to make it unique
-            structure_hash = hashlib.md5(
-                str([aa.index for aa in pdb_structure.amino_acids[:10]]).encode()
-            ).hexdigest()[:8]
-            viewer_base_key = f"molstar_{structure_id}_{structure_hash}"
-            
-            # Create a fingerprint of the current structure's indices to detect changes
-            # This ensures we recalculate nearby_residues when the structure changes
-            current_structure_fingerprint = str(sorted([aa.index for aa in pdb_structure.amino_acids]))
-            
-            # Check if we need to recalculate nearby_residues (structure changed or not computed)
-            needs_recalc = (
-                'nearby_residues' not in st.session_state or
-                st.session_state.get('structure_fingerprint') != current_structure_fingerprint
-            )
-            
-            if needs_recalc:
-                with st.spinner("Pre-computing distances..."):
-                    st.session_state.nearby_residues = precompute_nearby_residues(
-                        pdb_structure, distance_threshold=NEARBY_RESIDUE_DISTANCE
-                    )
-                    st.session_state.structure_fingerprint = current_structure_fingerprint
-                    # Also reset edited_contacts since structure changed
-                    if 'edited_contacts' in st.session_state:
-                        del st.session_state['edited_contacts']
-            
-            if 'edited_contacts' not in st.session_state:
-                # Convert contacts to list of (i, j) tuples for easier manipulation
-                # Handle both (i, j) and (i, j, ri, rj) formats
-                st.session_state.edited_contacts = []
-                for contact in contacts:
-                    if len(contact) >= 2:
-                        i, j = contact[0], contact[1]
-                        # Validate that these indices exist in the current structure
-                        valid_indices = set(aa.index for aa in pdb_structure.amino_acids)
-                        if i in valid_indices and j in valid_indices:
-                            st.session_state.edited_contacts.append((i, j))
-                    else:
-                        st.session_state.edited_contacts.append(contact)
-            
-            # Get the sorted list of actual residue indices (alignment column positions)
-            # After renumbering, aa.index is the alignment column position, not sequential
-            sorted_indices = sorted([aa.index for aa in pdb_structure.amino_acids])
-            index_to_aa = {aa.index: aa for aa in pdb_structure.amino_acids}
-            num_residues = len(sorted_indices)
-            
-            # Map from selector position (0, 1, 2...) to actual index
-            # This allows the selector to iterate through actual indices
-            if 'residue_selector_pos' not in st.session_state:
-                st.session_state.residue_selector_pos = 0
-            
-            # Layout: Structure viewer on left, controls on right
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                # Get the actual residue index from the selector position
-                selector_pos = st.session_state.residue_selector_pos
-                if selector_pos < len(sorted_indices):
-                    selected_idx = sorted_indices[selector_pos]
-                else:
-                    selected_idx = sorted_indices[0] if sorted_indices else 0
-                    st.session_state.residue_selector_pos = 0
-                nearby = st.session_state.nearby_residues.get(selected_idx, set())
-                contacting = get_contacts_for_residue(st.session_state.edited_contacts, selected_idx)
-                
-                # Display UniProt ID / AlphaFold link above the viewer
-                if pdb_id:
-                    alphafold_url = f"https://alphafold.ebi.ac.uk/entry/{pdb_id}"
-                    st.markdown(f"**Structure:** [{pdb_id}]({alphafold_url}) (AlphaFold)")
-                
-                # Display structure with Mol*
-                # Generate PDB content with color encoding for visualization
-                try:
-                    pdb_content = create_colored_pdb_content(
-                        pdb_structure, selected_idx, nearby, contacting
-                    )
-                except Exception as e:
-                    # If structure conversion fails, try fallback
-                    st.warning(f"Could not generate colored PDB from structure object: {str(e)}")
-                    # Try to use pdb_path if it exists and is a valid file
-                    if pdb_path:
-                        try:
-                            pdb_content = get_pdb_file_content(pdb_path)
-                        except Exception as e2:
-                            st.error(f"Could not load PDB content: {str(e2)}")
-                            st.info("Please recalculate contacts to regenerate the structure.")
-                            pdb_content = None
-                    else:
-                        st.error("No PDB structure or file available.")
-                        pdb_content = None
-                
-                if not pdb_content:
-                    st.error("Could not load PDB structure for visualization.")
-                    st.info("Upload a PDB structure or recalculate contacts on this page, then refresh.")
-                    st.stop()
-                
-                # Embedded Mol* viewer (B-factor categories → uncertainty color theme)
-                try:
-                    from utils.structure_viewer import create_molstar_html_viewer
-                    import streamlit.components.v1 as components
-                    
-                    html_content = create_molstar_html_viewer(
-                        pdb_content, pdb_structure, selected_idx, nearby, contacting,
-                        viewer_id=f"viewer_{viewer_base_key}"
-                    )
-                    # Caption bar + Mol* viewport (~620px)
-                    components.html(html_content, height=680)
-                except Exception as e:
-                    # Fall back to basic st_molstar if custom viewer fails
-                    st.warning(f"Could not create custom viewer: {str(e)}. Using basic viewer.")
-                    import traceback
-                    with st.expander("Error details"):
-                        st.code(traceback.format_exc())
-                    
-                    # Use the existing temp_dir from session state if available
-                    if 'temp_dir' in st.session_state and st.session_state.temp_dir:
-                        temp_dir = st.session_state.temp_dir
-                    else:
-                        temp_dir = tempfile.mkdtemp()
-                        st.session_state.temp_dir = temp_dir
-                    
-                    # Save PDB content to a file in temp directory (use stable filename)
-                    pdb_viewer_path = os.path.join(temp_dir, f"structure_viewer_{structure_id}.pdb")
-                    with open(pdb_viewer_path, 'w') as f:
-                        f.write(pdb_content)
-                    
-                    # Create Mol* component with file path
-                    st_molstar(
-                        pdb_viewer_path,
-                        key=viewer_base_key,
-                        height=700
-                    )
-                
-                # Instructions
-                st.info("💡 Use the controls on the right to select residues and edit contacts.")
-            
-            with col2:
-                st.subheader("Residue Selection")
-                
-                # Residue selector with dropdown and +/- buttons
-                col_minus, col_dropdown, col_plus = st.columns([1, 3, 1])
-                
-                # Get current position, ensuring it's valid
-                current_pos = st.session_state.residue_selector_pos
-                if current_pos >= len(sorted_indices):
-                    current_pos = 0
-                    st.session_state.residue_selector_pos = 0
-                
-                # Handle - button (previous residue)
-                with col_minus:
-                    prev_disabled = (current_pos <= 0)
-                    if st.button("◀", key="residue_prev", use_container_width=True, 
-                                 help="Previous residue", disabled=prev_disabled):
-                        st.session_state.residue_selector_pos = current_pos - 1
-                        st.rerun()
-                
-                # Dropdown for direct selection
-                with col_dropdown:
-                    if sorted_indices:
-                        # Format function to show residue number and amino acid
-                        def format_residue(idx):
-                            if idx in index_to_aa:
-                                aa = index_to_aa[idx]
-                                return f"{idx} ({aa.letter})"
-                            return f"{idx}"
-                        
-                        # Selectbox without key - controlled entirely by index parameter
-                        # This ensures buttons can update the displayed value
-                        new_idx = st.selectbox(
-                            "Select residue",
-                            options=sorted_indices,
-                            index=current_pos,
-                            label_visibility="collapsed",
-                            format_func=format_residue
-                        )
-                        
-                        # If user changed dropdown, update position
-                        if new_idx != sorted_indices[current_pos]:
-                            st.session_state.residue_selector_pos = sorted_indices.index(new_idx)
-                            st.rerun()
-                
-                # Handle + button (next residue)
-                with col_plus:
-                    next_disabled = (current_pos >= len(sorted_indices) - 1)
-                    if st.button("▶", key="residue_next", use_container_width=True,
-                                 help="Next residue", disabled=next_disabled):
-                        st.session_state.residue_selector_pos = current_pos + 1
-                        st.rerun()
-                
-                # Show selected residue info (selected_idx was calculated at top of col1)
-                if selected_idx in index_to_aa:
-                    aa = index_to_aa[selected_idx]
-                    st.markdown(f"**Residue {selected_idx}: {aa.name} ({aa.letter})**")
-                
-                st.markdown("---")
-                st.subheader("Contacts")
-                
-                # Save contacts button - at top for easy access
-                if st.button("💾 Save Contacts", type="primary", use_container_width=True):
-                    # Convert edited contacts back to original format if needed
-                    # Original format might be (i, j, ri, rj) but we're working with (i, j)
-                    # For saving, we'll use (i, j, None, None) format
-                    formatted_contacts = [(i, j, None, None) for i, j in st.session_state.edited_contacts]
-                    
-                    # Update session state contacts
-                    contacts_data['contacts'] = formatted_contacts
-                    st.session_state[SESSION_KEYS['schema_contacts']] = contacts_data
-                    
-                    # Save to file if temp_dir exists
-                    if 'temp_dir' in st.session_state:
-                        contact_file_path = os.path.join(st.session_state.temp_dir, "contacts.txt")
-                        from utils.schema_wrapper import save_contacts
-                        save_contacts(formatted_contacts, contact_file_path)
-                        st.success("✓ Contacts saved to file!")
-                    else:
-                        st.success("✓ Contacts updated in session!")
-                    
-                    # Autosave after contacts edited
-                    from utils.session_manager import auto_save
-                    auto_save("contacts_edited")
-                
-                st.markdown("---")
-                
-                # Get contacts for selected residue
-                contacting_residues = get_contacts_for_residue(
-                    st.session_state.edited_contacts, selected_idx
-                )
-                
-                # Get nearby residues (within 8Å)
-                nearby_residues = st.session_state.nearby_residues.get(selected_idx, set())
-                
-                # Show all nearby residues with checkboxes
-                # Contacts are checked, others are unchecked
-                all_candidates = sorted(list(nearby_residues | contacting_residues))
-                
-                if all_candidates:
-                    for res_j in all_candidates:
-                        is_contact = res_j in contacting_residues
-                        
-                        # Get amino acid info using index_to_aa mapping
-                        if res_j in index_to_aa:
-                            aa_j = index_to_aa[res_j]
-                            label = f"Residue {res_j}: {aa_j.name} ({aa_j.letter})"
-                        else:
-                            label = f"Residue {res_j}"
-                        
-                        # Checkbox
-                        new_value = st.checkbox(
-                            label,
-                            value=is_contact,
-                            key=f"contact_{selected_idx}_{res_j}"
-                        )
-                        
-                        # Update contacts if changed
-                        if new_value != is_contact:
-                            st.session_state.edited_contacts = update_contacts(
-                                st.session_state.edited_contacts,
-                                selected_idx,
-                                res_j,
-                                new_value
-                            )
-                            st.rerun()
-                else:
-                    st.info(f"No nearby residues within {NEARBY_RESIDUE_DISTANCE}Å")
-        
-        except ImportError:
-            st.warning("⚠️ streamlit-molstar not installed. Install with: pip install streamlit-molstar")
-            st.info("Structure viewer requires streamlit-molstar. Contact editing will be available after installation.")
-        except Exception as e:
-            st.error(f"Error displaying structure viewer: {str(e)}")
-            import traceback
-            with st.expander("Error Details"):
-                st.code(traceback.format_exc())
 
 # Display contact map if available
 if 'schema_contacts' in st.session_state:
@@ -1072,11 +589,6 @@ if 'schema_contacts' in st.session_state:
     
     fig = plot_contact_map(contacts, num_residues)
     st.plotly_chart(fig, use_container_width=True)
-    
-    # Save checkpoint option
-    with st.expander("💾 Save Project", expanded=False):
-        from utils.session_manager import render_save_project_ui
-        render_save_project_ui('save_contacts_viz_btn', inside_expander=True)
 
     # Calculate energies if crossover file is provided
     if 'crossover_file' in st.session_state:

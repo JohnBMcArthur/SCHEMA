@@ -99,6 +99,28 @@ LAST_PROJECT_FILE = CHECKPOINT_DIR / ".last_project"
 AUTOLOAD_SUPPRESSED_FILE = CHECKPOINT_DIR / ".autoload_suppressed"
 DIVERSITY_MSA_BUNDLE_NAME = "diversity_msa.fasta"
 
+
+def _sanitize_project_name(project_name: Optional[str], fallback: str = "imported_project") -> str:
+    raw = (project_name or fallback).strip()
+    safe = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in raw)
+    safe = safe.strip("._-") or fallback
+    return safe
+
+
+def _safe_extract_zip(zipf: zipfile.ZipFile, dest_dir: Path) -> None:
+    dest = dest_dir.resolve()
+    for member in zipf.namelist():
+        if member.endswith("/"):
+            continue
+        target = (dest / member).resolve()
+        if dest not in target.parents and target != dest:
+            raise ValueError(f"Unsafe path in archive: {member}")
+    zipf.extractall(dest)
+
+
+def _sanitize_import_filename(name: str) -> str:
+    return Path(name or "import.zip").name
+
 # Session keys persisted in checkpoint.pkl (domain state, not Streamlit widgets).
 CHECKPOINT_SESSION_KEYS: List[str] = list(SESSION_KEYS.values()) + [
     "parents_object_json",
@@ -135,6 +157,9 @@ CHECKPOINT_SESSION_KEYS: List[str] = list(SESSION_KEYS.values()) + [
     "oligopool_forward_primer",
     "oligopool_reverse_primer",
     "oligopool_max_length",
+    "assembly_fragment1_prepend_m",
+    "assembly_fragment1_use_manual_vector",
+    "assembly_fragment1_manual_overhang",
 ]
 
 CHECKPOINT_PATH_KEYS = {
@@ -460,7 +485,7 @@ def save_checkpoint(project_name=None, description="", parameters=None):
         project_name = f"checkpoint_{timestamp}"
     
     # Sanitize project name for directory name
-    safe_name = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in project_name)
+    safe_name = _sanitize_project_name(project_name, fallback=f"checkpoint_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     project_dir = CHECKPOINT_DIR / safe_name
     project_dir.mkdir(exist_ok=True)
     
@@ -1074,25 +1099,26 @@ def import_checkpoint(file_path: str, project_name: Optional[str] = None) -> str
         raise FileNotFoundError(f"File not found: {file_path}")
     
     if file_path.suffix == '.zip':
-        # Extract zip
+        # Extract zip (validate member paths to prevent Zip Slip)
         if project_name is None:
             project_name = file_path.stem
-        
-        project_dir = CHECKPOINT_DIR / project_name
-        project_dir.mkdir(exist_ok=True)
-        
+
+        safe_name = _sanitize_project_name(project_name, fallback=file_path.stem)
+        project_dir = CHECKPOINT_DIR / safe_name
+        project_dir.mkdir(parents=True, exist_ok=True)
+
         with zipfile.ZipFile(file_path, 'r') as zipf:
-            zipf.extractall(project_dir)
-        
+            _safe_extract_zip(zipf, project_dir)
+
         return str(project_dir)
-    
+
     elif file_path.suffix == '.json':
-        # Import from JSON (requires manual reconstruction)
+        # Import from JSON (preferred for untrusted uploads — no pickle in upload)
         if project_name is None:
             project_name = file_path.stem
-        
-        project_dir = CHECKPOINT_DIR / project_name
-        project_dir.mkdir(exist_ok=True)
+
+        safe_name = _sanitize_project_name(project_name, fallback=file_path.stem)
+        project_dir = CHECKPOINT_DIR / safe_name
         
         with open(file_path, 'r') as f:
             json_data = json.load(f)
