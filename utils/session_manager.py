@@ -281,6 +281,10 @@ def _prepare_snapshot_value(key: str, value: Any) -> Any:
         return serialize_raspp_raw_results(value)
     if key == "library_opt_results":
         return _shrink_library_opt_results(value)
+    if key == SESSION_KEYS["schema_contacts"]:
+        from utils.schema_wrapper import prepare_contacts_for_session
+
+        return prepare_contacts_for_session(value) if isinstance(value, dict) else value
     return value
 
 

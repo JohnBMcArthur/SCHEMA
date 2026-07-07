@@ -55,7 +55,7 @@ def parse_arguments(args):
 			key = arg[1:]
 			arg_dict[key] = None
 		else:
-			if arg_dict.has_key(key):
+			if key in arg_dict:
 				if arg_dict[key]:
 					if type(arg_dict[key]) is list:
 						arg_dict[key] = arg_dict[key]+[arg]
@@ -125,7 +125,7 @@ def main(args):
 	# If you don't provide a PDB alignment file, the program will assume that the ID of the PDB structure
 	# contained in the HEADER field corresponds to one of the sequence IDs in the MSA.
 	parent_pdb_alignment_file = None
-	if arg_dict.has_key(ARG_PDB_ALIGNMENT_FILE):
+	if ARG_PDB_ALIGNMENT_FILE in arg_dict:
 		if not os.path.isfile(arg_dict[ARG_PDB_ALIGNMENT_FILE]):
 			print("  Can't find PDB/parent alignment file %s" % arg_dict[ARG_PDB_ALIGNMENT_FILE])
 			return 
@@ -139,7 +139,7 @@ def main(args):
 	# chains which correspond to the protein whose contacts are being evaluated.
 	# Most often, chain 'A' (in the case of multiple chains) or chain ' ' (only one chain)
 	# will be the appropriate choice.
-	if arg_dict.has_key(ARG_CHAINS):
+	if ARG_CHAINS in arg_dict:
 		chains = arg_dict[ARG_CHAINS]
 		if type(chains) is list:
 			chain_identifiers = chains + [' ']
@@ -215,7 +215,7 @@ def main(args):
 	#print(parent_dict[pdb_key]
 	
 	# 	The contact file name for output.
-	if arg_dict.has_key(ARG_OUTPUT_FILE):
+	if ARG_OUTPUT_FILE in arg_dict:
 		contact_file = file(arg_dict[ARG_OUTPUT_FILE], 'w')
 	else:
 		contact_file = sys.stdout
@@ -235,4 +235,5 @@ def main(args):
 def main_wrapper():
 	main(sys.argv)
 
-main_wrapper()
+if __name__ == "__main__":
+	main_wrapper()

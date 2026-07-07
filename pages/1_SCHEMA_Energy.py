@@ -17,7 +17,7 @@ from utils.file_handlers import (
     save_uploaded_file
 )
 from utils.schema_wrapper import (
-    calculate_contacts, calculate_energies, save_contacts
+    calculate_contacts, calculate_energies, save_contacts, store_contacts_in_session,
 )
 from utils.visualization import plot_contact_map, plot_energy_distribution
 from utils.session_manager import init_session_state
@@ -280,7 +280,6 @@ step 2 is already in session.
                         if pdb_file:
                             callback(0.9, "Step 4/4: Calculating SCHEMA contacts...")
                             from utils.schema_wrapper import calculate_contacts
-                            from utils.schemarecomb_bridge import parent_sequences_to_json
                             
                             # Calculate contacts using schemarecomb (automatic PDB alignment)
                             contacts_result = calculate_contacts(
@@ -291,18 +290,13 @@ step 2 is already in session.
                                 progress_callback=lambda p, m: callback(0.9 + p * 0.1, f"Contacts: {m}")
                             )
                             
-                            # Store in session state
-                            st.session_state.schema_contacts = contacts_result
+                            store_contacts_in_session(contacts_result)
                             clear_downstream_from_contacts()
                             # Use trimmed MSA file if available (domain boundaries applied)
                             st.session_state.msa_path = contacts_result.get('trimmed_msa_file', msa_file)
                             st.session_state.pdb_path = pdb_file
                             st.session_state.pdb_id = pdb_id
                             st.session_state.sequences = sequences
-                            
-                            # Store ParentSequences object as JSON for later use
-                            if 'parents_object' in contacts_result:
-                                st.session_state.parents_object_json = parent_sequences_to_json(contacts_result['parents_object'])
                             
                             callback(1.0, "✓ Workflow complete!")
                             st.success("✓ SCHEMA contacts calculated successfully!")
@@ -350,40 +344,53 @@ step 2 is already in session.
         
         if manual_pdb_file and st.button("Calculate Contacts with Uploaded PDB", key="calc_manual_pdb"):
             from utils.schema_wrapper import calculate_contacts
-            import tempfile
-            
-            temp_dir = tempfile.mkdtemp()
-            pdb_path = save_uploaded_file(manual_pdb_file, temp_dir)
-            
+
             try:
-                contacts_result = calculate_contacts(
-                    pdb_path,
-                    st.session_state[SESSION_KEYS['msa_path']],
-                    None,
-                    ['A', ' '],
-                    contact_distance
-                )
-                
-                st.session_state[SESSION_KEYS['schema_contacts']] = contacts_result
-                clear_downstream_from_contacts()
-                st.session_state[SESSION_KEYS['pdb_path']] = pdb_path
-                # Update MSA path to trimmed version if available
-                if contacts_result.get('trimmed_msa_file'):
-                    st.session_state[SESSION_KEYS['msa_path']] = contacts_result['trimmed_msa_file']
-                st.success("✓ SCHEMA contacts calculated!")
-                
-                # Display contact statistics
-                num_contacts = len(contacts_result['contacts'])
-                # Handle case where residues might be None
-                num_residues = len(contacts_result['residues']) if contacts_result.get('residues') else "N/A"
-                num_parents = len(contacts_result['parents'])
-                
-                st.info(f"""
-                **Contact Statistics:**
-                - Number of contacts: {num_contacts}
-                - Number of residues: {num_residues}
-                - Number of parent sequences: {num_parents}
-                """)
+                temp_dir = tempfile.mkdtemp()
+                pdb_path = save_uploaded_file(manual_pdb_file, temp_dir)
+                msa_path = st.session_state.get(SESSION_KEYS["msa_path"])
+                if not msa_path:
+                    st.error(
+                        "No MSA in session. Run the automated workflow first, or use "
+                        "Manual (Upload Files) mode with both PDB and MSA."
+                    )
+                else:
+                    with st.spinner("Calculating SCHEMA contacts..."):
+                        contacts_result = calculate_contacts(
+                            pdb_path,
+                            msa_path,
+                            chains=["A"],
+                            contact_distance=contact_distance,
+                        )
+
+                    store_contacts_in_session(contacts_result)
+                    clear_downstream_from_contacts()
+                    st.session_state[SESSION_KEYS["pdb_path"]] = pdb_path
+                    st.session_state.temp_dir = temp_dir
+                    if contacts_result.get("trimmed_msa_file"):
+                        st.session_state[SESSION_KEYS["msa_path"]] = contacts_result[
+                            "trimmed_msa_file"
+                        ]
+                    st.success("✓ SCHEMA contacts calculated!")
+
+                    num_contacts = len(contacts_result["contacts"])
+                    num_residues = (
+                        len(contacts_result["residues"])
+                        if contacts_result.get("residues")
+                        else "N/A"
+                    )
+                    num_parents = len(contacts_result["parents"])
+
+                    st.info(f"""
+                    **Contact Statistics:**
+                    - Number of contacts: {num_contacts}
+                    - Number of residues: {num_residues}
+                    - Number of parent sequences: {num_parents}
+                    """)
+
+                    from utils.session_manager import auto_save
+
+                    auto_save("contacts_calculated")
             except Exception as e:
                 st.error(f"Error calculating contacts: {str(e)}")
 
@@ -498,7 +505,6 @@ the shared domain if needed, and computes SCHEMA contacts.
                     msa_path = save_uploaded_file(msa_file, temp_dir)
                     
                     # Calculate contacts using schemarecomb (automatic PDB alignment)
-                    from utils.schemarecomb_bridge import parent_sequences_to_json
                     contacts_result = calculate_contacts(
                         pdb_path,
                         msa_path,
@@ -506,12 +512,7 @@ the shared domain if needed, and computes SCHEMA contacts.
                         contact_distance=contact_distance
                     )
                     
-                    # Store ParentSequences object as JSON for later use
-                    if 'parents_object' in contacts_result:
-                        st.session_state.parents_object_json = parent_sequences_to_json(contacts_result['parents_object'])
-                    
-                    # Store in session state
-                    st.session_state.schema_contacts = contacts_result
+                    store_contacts_in_session(contacts_result)
                     st.session_state.temp_dir = temp_dir
                     st.session_state.pdb_path = pdb_path
                     # Use trimmed MSA file if available (domain boundaries applied)
@@ -569,6 +570,14 @@ if 'schema_contacts' in st.session_state:
     # Calculate num_residues from residues if available, otherwise from contacts or parents
     if contacts_data.get('residues') is not None:
         num_residues = len(contacts_data['residues'])
+    elif contacts_data.get("parents"):
+        parents_list = contacts_data["parents"]
+        if parents_list:
+            first = parents_list[0]
+            aligned = first[1] if isinstance(first, (list, tuple)) and len(first) > 1 else first
+            num_residues = len(aligned) if aligned else None
+        else:
+            num_residues = None
     elif contacts_data.get('parents_object') is not None:
         # Use aligned sequence length from schemarecomb ParentSequences
         parents_obj = contacts_data['parents_object']

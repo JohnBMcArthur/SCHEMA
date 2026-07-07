@@ -23,6 +23,37 @@ from utils.schemarecomb_bridge import (
     msa_to_parent_sequences, sequences_to_parent_sequences, save_parents_to_fasta
 )
 
+_NON_SERIALIZABLE_CONTACT_KEYS = frozenset({
+    "pdb_structure",
+    "parents_object",
+    "original_parents",
+})
+
+
+def prepare_contacts_for_session(contacts_result: dict) -> dict:
+    """Return a session-state-safe copy (no schemarecomb objects)."""
+    if not isinstance(contacts_result, dict):
+        return contacts_result
+    return {
+        k: v for k, v in contacts_result.items() if k not in _NON_SERIALIZABLE_CONTACT_KEYS
+    }
+
+
+def store_contacts_in_session(contacts_result: dict) -> None:
+    """Persist contact calculation results in Streamlit session state."""
+    import streamlit as st
+
+    from utils.config import SESSION_KEYS
+    from utils.schemarecomb_bridge import parent_sequences_to_json
+
+    parents_obj = contacts_result.get("parents_object")
+    if parents_obj is not None:
+        st.session_state["parents_object_json"] = parent_sequences_to_json(parents_obj)
+
+    safe = prepare_contacts_for_session(contacts_result)
+    st.session_state[SESSION_KEYS["schema_contacts"]] = safe
+    st.session_state.schema_contacts = safe
+
 
 def calculate_contacts(pdb_file, msa_file, chains=None, contact_distance=5.0, 
                       progress_callback=None):

@@ -37,6 +37,6 @@ def test_stuffer_library_lookup():
 
 
 def test_data_files_exist():
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parent.parent
     assert (root / "data" / "gga_aa_pair_compatibility.yaml").is_file()
     assert (root / "data" / "stuffer_sequences.yaml").is_file()

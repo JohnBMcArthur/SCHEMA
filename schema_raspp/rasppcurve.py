@@ -199,4 +199,5 @@ def main(args):
 def main_wrapper():
 	main(sys.argv)
 
-main_wrapper()
+if __name__ == "__main__":
+	main_wrapper()

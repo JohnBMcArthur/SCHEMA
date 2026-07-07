@@ -52,7 +52,7 @@ def parse_arguments(args):
 			key = arg[1:]
 			arg_dict[key] = None
 		else:
-			if arg_dict.has_key(key):
+			if key in arg_dict:
 				if arg_dict[key]:
 					if type(arg_dict[key]) is list:
 						arg_dict[key] = arg_dict[key]+[arg]
@@ -110,7 +110,7 @@ def main(args):
 	# chains which correspond to the protein whose contacts are being evaluated.
 	# Most often, chain 'A' (in the case of multiple chains) or chain ' ' (only one chain)
 	# will be the appropriate choice.
-	if arg_dict.has_key(ARG_CHAINS):
+	if ARG_CHAINS in arg_dict:
 		chains = arg_dict[ARG_CHAINS]
 		if type(chains) is list:
 			chain_identifiers = chains + [' ']
@@ -120,7 +120,7 @@ def main(args):
 		chain_identifiers = ['A',' ']
 	
 	# 	The file name for output.
-	if arg_dict.has_key(ARG_OUTPUT_FILE):
+	if ARG_OUTPUT_FILE in arg_dict:
 		output_file = file(arg_dict[ARG_OUTPUT_FILE], 'w')
 	else:
 		output_file = sys.stdout
@@ -138,11 +138,12 @@ def main(args):
 	output_file.write('# Residue sequence for chain(s) %s from PDB file %s\n%s' % \
 		(chain_identifiers, pdb_file, residue_seq))
 	
-	if arg_dict.has_key(ARG_OUTPUT_FILE):
+	if ARG_OUTPUT_FILE in arg_dict:
 		output_file.close()
 
 		
 def main_wrapper():
 	main(sys.argv)
 
-main_wrapper()
+if __name__ == "__main__":
+	main_wrapper()
