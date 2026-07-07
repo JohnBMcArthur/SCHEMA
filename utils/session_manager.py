@@ -47,14 +47,12 @@ def has_required_data(workflow_step):
         tuple: (has_data, error_message)
     """
     if workflow_step == 'contacts':
-        if SESSION_KEYS['schema_contacts'] not in st.session_state or \
-           st.session_state[SESSION_KEYS['schema_contacts']] is None:
+        if not has_schema_contacts():
             return False, "No SCHEMA contacts calculated. Please calculate contacts first."
         return True, None
     
     elif workflow_step == 'energies':
-        if SESSION_KEYS['schema_contacts'] not in st.session_state or \
-           st.session_state[SESSION_KEYS['schema_contacts']] is None:
+        if not has_schema_contacts():
             return False, "No SCHEMA contacts available. Please calculate contacts first."
         if SESSION_KEYS['crossover_file'] not in st.session_state or \
            st.session_state[SESSION_KEYS['crossover_file']] is None:
@@ -62,12 +60,26 @@ def has_required_data(workflow_step):
         return True, None
     
     elif workflow_step == 'raspp':
-        if SESSION_KEYS['schema_contacts'] not in st.session_state or \
-           st.session_state[SESSION_KEYS['schema_contacts']] is None:
+        if not has_schema_contacts():
             return False, "No SCHEMA contacts available. Please calculate contacts first."
         return True, None
     
     return False, f"Unknown workflow step: {workflow_step}"
+
+
+def get_schema_contacts_data():
+    """Return schema_contacts dict when session holds a calculated contact list."""
+    data = st.session_state.get(SESSION_KEYS["schema_contacts"])
+    if not isinstance(data, dict):
+        return None
+    contacts = data.get("contacts")
+    if not contacts:
+        return None
+    return data
+
+
+def has_schema_contacts() -> bool:
+    return get_schema_contacts_data() is not None
 
 
 # Checkpoint functionality

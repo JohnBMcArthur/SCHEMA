@@ -20,7 +20,7 @@ from utils.schema_wrapper import (
     calculate_contacts, calculate_energies, save_contacts, store_contacts_in_session,
 )
 from utils.visualization import plot_contact_map, plot_energy_distribution
-from utils.session_manager import init_session_state
+from utils.session_manager import init_session_state, get_schema_contacts_data
 from utils.workflow_state import clear_downstream_from_contacts
 from utils.config import DEFAULTS, SESSION_KEYS, SCHEMA_DEBUG
 
@@ -561,11 +561,11 @@ the shared domain if needed, and computes SCHEMA contacts.
                     st.error(f"Error calculating contacts: {str(e)}")
 
 # Display contact map if available
-if 'schema_contacts' in st.session_state:
+contacts_data = get_schema_contacts_data()
+if contacts_data:
     st.header("Contact Map Visualization")
     
-    contacts_data = st.session_state[SESSION_KEYS['schema_contacts']]
-    contacts = contacts_data['contacts']
+    contacts = contacts_data["contacts"]
     
     # Calculate num_residues from residues if available, otherwise from contacts or parents
     if contacts_data.get('residues') is not None:
@@ -668,10 +668,11 @@ if 'schema_contacts' in st.session_state:
                         st.error(f"Error calculating energies: {str(e)}")
 
 # Download contacts file
-if 'schema_contacts' in st.session_state:
+contacts_data = get_schema_contacts_data()
+if contacts_data:
     st.header("Export Results")
     
-    contacts = st.session_state.schema_contacts['contacts']
+    contacts = contacts_data["contacts"]
     
     # Create download button for contacts
     contact_file_content = ""
